@@ -8,7 +8,7 @@ import org.springframework.kafka.annotation.KafkaListener;
 @Configuration
 public class KafkaConsumerListener {
     @Value("${app.kafka.topic.repository-query}")
-    private String topicName;
+    private String topics;
 
     @Value("${spring.kafka.consumer.group-id}")
     private String groupId;

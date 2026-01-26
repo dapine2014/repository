@@ -8,17 +8,22 @@ import com.mongodb.client.result.InsertManyResult;
 import com.mongodb.client.result.InsertOneResult;
 import com.mongodb.client.result.UpdateResult;
 import org.bson.Document;
+import org.bson.types.ObjectId;
 import org.springframework.stereotype.Component;
 import storm.repository.com.core.api.ConnectorConfig;
 import storm.repository.com.core.dto.RepositoryOperationDto;
 import storm.repository.com.core.runtime.RepositoryConnectorExecutor;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
 @Component
 public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
+    private static final int DEFAULT_LIMIT = 200;
+    private static final int MAX_LIMIT = 5000;
+    private static final int ABSOLUTE_MAX_LIMIT = 100000;
     @Override
     public String connectorId() {
         return "mongo";
@@ -57,9 +62,21 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
     }
 
     private Object find(MongoCollection<Document> collection, RepositoryOperationDto operation) {
-        Document filter = toDocument(operation.getFilter());
-        List<Document> results = collection.find(filter).into(new ArrayList<>());
-        return results;
+        Document filter = buildFindFilter(operation);
+        Integer limit = operation.getLimit();
+        var query = collection.find(filter).sort(new Document("_id", 1));
+        int defaultLimit = resolveDefaultLimit(operation);
+        int maxLimit = resolveMaxLimit(operation, defaultLimit);
+        int effectiveLimit = resolveEffectiveLimit(limit, defaultLimit, maxLimit);
+        query = query.limit(effectiveLimit);
+        List<Document> results = query.into(new ArrayList<>());
+        String nextCursor = extractNextCursor(results);
+        long totalCount = collection.countDocuments(toDocument(operation.getFilter()));
+        return Map.of(
+                "items", results,
+                "nextCursor", nextCursor,
+                "totalCount", totalCount
+        );
     }
 
     private Object insert(MongoCollection<Document> collection, RepositoryOperationDto operation) {
@@ -101,6 +118,68 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
             return new Document();
         }
         return new Document(map);
+    }
+
+    private Document buildFindFilter(RepositoryOperationDto operation) {
+        Document baseFilter = toDocument(operation.getFilter());
+        String cursor = operation.getCursor();
+        if (cursor == null || cursor.isBlank()) {
+            return baseFilter;
+        }
+        ObjectId objectId = parseCursor(cursor);
+        Document cursorFilter = new Document("_id", new Document("$gt", objectId));
+        if (baseFilter.isEmpty()) {
+            return cursorFilter;
+        }
+        if (baseFilter.containsKey("_id")) {
+            return new Document("$and", Arrays.asList(baseFilter, cursorFilter));
+        }
+        baseFilter.put("_id", new Document("$gt", objectId));
+        return baseFilter;
+    }
+
+    private ObjectId parseCursor(String cursor) {
+        try {
+            return new ObjectId(cursor);
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("Invalid cursor; expected Mongo ObjectId hex string");
+        }
+    }
+
+    private String extractNextCursor(List<Document> results) {
+        if (results == null || results.isEmpty()) {
+            return null;
+        }
+        Document last = results.get(results.size() - 1);
+        Object id = last.get("_id");
+        if (id instanceof ObjectId objectId) {
+            return objectId.toHexString();
+        }
+        return id == null ? null : id.toString();
+    }
+
+    private int resolveDefaultLimit(RepositoryOperationDto operation) {
+        Integer provided = operation.getDefaultLimit();
+        if (provided != null && provided > 0) {
+            return Math.min(provided, ABSOLUTE_MAX_LIMIT);
+        }
+        return DEFAULT_LIMIT;
+    }
+
+    private int resolveMaxLimit(RepositoryOperationDto operation, int defaultLimit) {
+        Integer provided = operation.getMaxLimit();
+        if (provided != null && provided > 0) {
+            return Math.min(provided, ABSOLUTE_MAX_LIMIT);
+        }
+        return Math.min(MAX_LIMIT, ABSOLUTE_MAX_LIMIT);
+    }
+
+    private int resolveEffectiveLimit(Integer limit, int defaultLimit, int maxLimit) {
+        int effective = defaultLimit;
+        if (limit != null && limit > 0) {
+            effective = limit;
+        }
+        return Math.min(effective, maxLimit);
     }
 
     private Map<String, Object> asMap(Object payload, String name) {

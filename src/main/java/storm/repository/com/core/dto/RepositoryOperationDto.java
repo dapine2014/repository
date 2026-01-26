@@ -16,4 +16,8 @@ public class RepositoryOperationDto {
     private String collection;
     private Map<String, Object> filter;
     private Object payload;
+    private Integer limit;
+    private String cursor;
+    private Integer defaultLimit;
+    private Integer maxLimit;
 }

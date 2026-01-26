@@ -50,6 +50,8 @@ Payload recomendado (request):
     "method": "find",
     "collection": "users",
     "filter": { "active": true },
+    "limit": 100,
+    "cursor": null,
     "payload": null
   }
 }
@@ -65,7 +67,11 @@ Payload recomendado (response):
   "from": "repository",
   "to": "service-a",
   "status": "OK",
-  "data": [ ... ],
+  "data": {
+    "items": [ ... ],
+    "nextCursor": "65b9f0e3c2a1b2c3d4e5f678",
+    "totalCount": 1234
+  },
   "error": null
 }
 ```
@@ -80,7 +86,7 @@ Ejecutar prueba (insert / find):
 ## DTOs y flujo
 
 - `RepositoryMessageDto`: sobre unico para request/response.
-- `RepositoryOperationDto`: describe la operacion (method, collection, filter, payload).
+- `RepositoryOperationDto`: describe la operacion (method, collection, filter, payload) y paginacion (limit, cursor, defaultLimit, maxLimit).
 - `MessageHandler` resuelve el `connectorId` y ejecuta via `RepositoryConnectorExecutor`.
 
 ## Plugins
@@ -129,6 +135,55 @@ Operaciones (ejemplo):
   }
 }
 ```
+
+## Paginacion (Mongo)
+
+El `find` soporta cursor por `_id` y limite de resultados. El cursor se devuelve en la respuesta como `nextCursor`, para que el cliente lo use en la siguiente pagina.
+
+Ejemplo (pagina 1):
+
+```json
+{
+  "operation": {
+    "method": "find",
+    "collection": "users",
+    "filter": {},
+    "limit": 100
+  }
+}
+```
+
+Respuesta:
+
+```json
+{
+  "data": {
+    "items": [ ... ],
+    "nextCursor": "65b9f0e3c2a1b2c3d4e5f678",
+    "totalCount": 1234
+  }
+}
+```
+
+Ejemplo (pagina 2 con cursor):
+
+```json
+{
+  "operation": {
+    "method": "find",
+    "collection": "users",
+    "filter": {},
+    "limit": 100,
+    "cursor": "65b9f0e3c2a1b2c3d4e5f678"
+  }
+}
+```
+
+Limites:
+
+- Si no se envia `limit`, se usa `defaultLimit` (por defecto 200).
+- Se puede enviar `maxLimit` para controlar el maximo permitido (por defecto 5000).
+- El sistema aplica un maximo absoluto (100000) para evitar consultas excesivas.
 
 ## Como agregar un nuevo plugin
 

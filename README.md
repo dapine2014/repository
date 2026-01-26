@@ -30,6 +30,8 @@ Repositorio base para conectores en STORM. Implementa una arquitectura monolitic
 
 - Topic de entrada: `app.kafka.topic.repository-query`
 - Topic de respuesta: `app.kafka.topic.repository-response`
+- Ejemplos listos: `examples/kafka-request-insert.json`, `examples/kafka-request-find.json`
+- Script de prueba: `scripts/kafka-request.sh`
 
 Payload recomendado (request):
 
@@ -66,6 +68,13 @@ Payload recomendado (response):
   "data": [ ... ],
   "error": null
 }
+```
+
+Ejecutar prueba (insert / find):
+
+```
+./scripts/kafka-request.sh examples/kafka-request-insert.json
+./scripts/kafka-request.sh examples/kafka-request-find.json
 ```
 
 ## DTOs y flujo

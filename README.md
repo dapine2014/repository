@@ -1,11 +1,11 @@
 # STORM Repository
 
-Repositorio base para conectores en STORM. Implementa una arquitectura monolitica con plugins (SPI/ServiceLoader) para descubrir conectores en tiempo de ejecucion.
+Repositorio base para conectores en STORM. Implementa una arquitectura monolitica con plugins (SPI/ServiceLoader) para descubrir metadatos de conectores en tiempo de ejecucion y ejecutores inyectados por Spring.
 
 ## Arquitectura
 
-- Monolito modular con carga dinamica de plugins.
-- SPI nativo de Java (`ServiceLoader`).
+- Monolito modular con carga dinamica de plugins (metadata) via `ServiceLoader`.
+- Ejecutores por conector como beans de Spring (`RepositoryConnectorExecutor`).
 - Plugins registrados en `src/main/resources/META-INF/services`.
 - Orquestacion por Kafka: todas las solicitudes entran por topic y se responden por topic dedicado.
 
@@ -17,19 +17,20 @@ Repositorio base para conectores en STORM. Implementa una arquitectura monolitic
   - Contratos base: `ConnectorPlugin`, `ConnectorType`, `ConnectorConfig`.
 - `src/main/java/storm/repository/com/core/runtime`
   - `ConnectorRegistry`: carga plugins via `ServiceLoader`.
-- `src/main/java/storm/repository/com/core/runtime`
-  - `RepositoryConnectorExecutor`: contrato de ejecucion por conector (dinamico).
-- `src/main/java/storm/repository/com/core/errors`
-  - Errores de dominio (ej. `ConnectorNotFoundException`).
+  - `RepositoryConnectorExecutor`: contrato de ejecucion por conector.
+- `src/main/java/storm/repository/com/core/listener`
+  - `KafkaConsumerListener`, `MessageHandler`: entrada y ruteo de mensajes.
+- `src/main/java/storm/repository/com/core/adapter/inbound`
+  - `KafkaMessageObserver`, `KafkaMessageReception`: publicacion de respuestas.
 - `src/main/java/storm/repository/com/connectors`
-  - Implementaciones de plugins por tecnologia (mysql, mongo, etc.).
+  - Implementaciones de plugins y ejecutores por tecnologia (mongo).
 - `src/main/resources/META-INF/services`
   - Registro SPI de plugins disponibles en el classpath.
 
 ## Kafka (request/response)
 
-- Topic de entrada: `app.kafka.topic.repository-query`
-- Topic de respuesta: `app.kafka.topic.repository-response`
+- Topic de entrada (por defecto): `REPOSITORY_QUERY` (`app.kafka.topic.repository-query`)
+- Topic de respuesta (por defecto): `REPOSITORY_RESPONSE` (`app.kafka.topic.repository-response`)
 - Ejemplos listos: `examples/kafka-request-insert.json`, `examples/kafka-request-find.json`
 - Script de prueba: `scripts/kafka-request.sh`
 
@@ -87,7 +88,8 @@ Ejecutar prueba (insert / find):
 
 - `RepositoryMessageDto`: sobre unico para request/response.
 - `RepositoryOperationDto`: describe la operacion (method, collection, filter, payload) y paginacion (limit, cursor, defaultLimit, maxLimit).
-- `MessageHandler` resuelve el `connectorId` y ejecuta via `RepositoryConnectorExecutor`.
+- `MessageHandler` resuelve el `connectorId` y ejecuta via `RepositoryConnectorExecutor` (beans de Spring).
+- `RepositoryMessageDto.config` es un `Map<String, String>` (ej. `uri`, `database` para Mongo).
 
 ## Plugins
 
@@ -185,17 +187,37 @@ Limites:
 - Se puede enviar `maxLimit` para controlar el maximo permitido (por defecto 5000).
 - El sistema aplica un maximo absoluto (100000) para evitar consultas excesivas.
 
+## Configuracion requerida
+
+Propiedades obligatorias (por environment o argumentos JVM):
+
+- `spring.kafka.bootstrap-servers`
+- `spring.kafka.consumer.group-id`
+- `app.mongo.uri`
+- `app.mongo.database`
+
+Propiedades con valores por defecto en `application-dev.properties` y `application-prod.properties`:
+
+- `app.kafka.topic.repository-query=REPOSITORY_QUERY`
+- `app.kafka.topic.repository-response=REPOSITORY_RESPONSE`
+
+Nota: el profile activo por defecto es `local`, pero no existe `application-local.properties`. Debes definir las propiedades anteriores via variables de entorno o cambiar el profile.
+
 ## Como agregar un nuevo plugin
 
 1. Crear una clase en `src/main/java/storm/repository/com/connectors/<tu_conector>`.
 2. Implementar `ConnectorPlugin`.
 3. Registrar la clase en `META-INF/services/storm.repository.com.core.api.ConnectorPlugin`.
-4. Opcional: crear un config wrapper y un client de conexion.
+4. Implementar un `RepositoryConnectorExecutor` si el conector debe ser ejecutable.
+5. Opcional: crear un config wrapper y un client de conexion.
+
+Actualmente solo Mongo tiene executor. El plugin de MySQL existe como metadata pero no hay executor.
 
 ## Dependencias
 
 - Java 21
-- Spring Boot 4
+- Spring Boot 4.0.1
+- Spring Kafka
 - MongoDB driver sync
 
 ## Desarrollo

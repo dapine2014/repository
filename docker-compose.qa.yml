@@ -1,0 +1,13 @@
+services:
+  repository:
+    image: repository
+    container_name: repository-qa
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      SPRING_PROFILES_ACTIVE: qa
+      SPRING_CONFIG_NAME: application-qa
+    ports:
+      - "8082:8080"
+    restart: unless-stopped

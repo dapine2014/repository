@@ -2,6 +2,7 @@ package storm.repository.com.core.config;
 
 import com.mongodb.client.MongoClient;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import storm.repository.com.connectors.mongo.MongoConnectorClient;
@@ -11,11 +12,12 @@ import storm.repository.com.core.api.ConnectorConfig;
 import java.util.Map;
 
 @Configuration
+@ConditionalOnProperty(name = {"app.mongo.uri", "app.mongo.database"})
 public class MongoConnectorConfiguration {
-    @Value("${app.mongo.uri}")
+    @Value("${app.mongo.uri:}")
     private String uri;
 
-    @Value("${app.mongo.database}")
+    @Value("${app.mongo.database:}")
     private String database;
 
     @Bean

@@ -13,6 +13,8 @@
     "collection": "users",
     "payload": {
       "name": "Ana",
+      "lastname": "pedro",
+      "email": "acme186@hotmail.com",
       "active": true
     }
   }

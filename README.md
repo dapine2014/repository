@@ -193,8 +193,8 @@ Propiedades obligatorias (por environment o argumentos JVM):
 
 - `spring.kafka.bootstrap-servers`
 - `spring.kafka.consumer.group-id`
-- `app.mongo.uri`
-- `app.mongo.database`
+ 
+Nota: la conexion a Mongo se define en el payload (`config.uri` y `config.database`). No se requieren `app.mongo.*` en properties.
 
 Propiedades con valores por defecto en `application-dev.properties` y `application-prod.properties`:
 

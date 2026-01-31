@@ -44,8 +44,24 @@ public class MessageHandler {
 
     public void processMessage(String message) {
         logReceivedMessage(message);
-        RepositoryMessageDto payload = fromJson(message, RepositoryMessageDto.class);
+        if (message == null || message.isBlank()) {
+            notify(buildErrorResponse(null, "Empty message"));
+            return;
+        }
+        RepositoryMessageDto payload;
+        try {
+            payload = fromJson(message, RepositoryMessageDto.class);
+        } catch (RuntimeException ex) {
+            log.error("Failed to parse message as JSON", ex);
+            notify(buildErrorResponse(null, "Invalid JSON payload"));
+            return;
+        }
         if (payload.getType() == null || payload.getType() == MessageType.REQUEST) {
+            String validationError = validateRequest(payload);
+            if (validationError != null) {
+                notify(buildErrorResponse(payload, validationError));
+                return;
+            }
             createAndSendResponseMessage(payload);
         } else {
             notify(payload);
@@ -83,5 +99,43 @@ public class MessageHandler {
 
         notify(response);
 
+    }
+
+    private String validateRequest(RepositoryMessageDto data) {
+        if (data == null) {
+            return "Missing message body";
+        }
+        if (data.getRequestId() == null || data.getRequestId().isBlank()) {
+            return "Missing requestId";
+        }
+        if (data.getFrom() == null || data.getFrom().isBlank()) {
+            return "Missing from";
+        }
+        if (data.getTo() == null || data.getTo().isBlank()) {
+            return "Missing to";
+        }
+        if (data.getConnectorId() == null || data.getConnectorId().isBlank()) {
+            return "Missing connectorId";
+        }
+        if (data.getConfig() == null || data.getConfig().isEmpty()) {
+            return "Missing config";
+        }
+        if (data.getOperation() == null) {
+            return "Missing operation";
+        }
+        return null;
+    }
+
+    private RepositoryMessageDto buildErrorResponse(RepositoryMessageDto data, String errorMessage) {
+        return RepositoryMessageDto.builder()
+                .type(MessageType.RESPONSE)
+                .requestId(data == null ? null : data.getRequestId())
+                .correlationId(data == null ? null : data.getCorrelationId())
+                .from(data == null ? "repository" : data.getTo())
+                .to(data == null ? null : data.getFrom())
+                .connectorId(data == null ? null : data.getConnectorId())
+                .status("ERROR")
+                .error(errorMessage)
+                .build();
     }
 }

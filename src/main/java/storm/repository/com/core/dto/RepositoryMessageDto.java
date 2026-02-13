@@ -18,6 +18,8 @@ public class RepositoryMessageDto {
     private String from;
     private String to;
     private String connectorId;
+    private String configRef;
+    private String repositoryId;
     private Map<String, String> config;
     private RepositoryOperationDto operation;
     private Object data;

@@ -42,11 +42,7 @@ Payload recomendado (request):
   "requestId": "uuid-123",
   "from": "service-a",
   "to": "repository",
-  "connectorId": "mongo",
-  "config": {
-    "uri": "mongodb://alex:alex8080@localhost:27017/listenme?authSource=admin",
-    "database": "listenme"
-  },
+  "configRef": "default",
   "operation": {
     "method": "find",
     "collection": "users",
@@ -89,7 +85,9 @@ Ejecutar prueba (insert / find):
 - `RepositoryMessageDto`: sobre unico para request/response.
 - `RepositoryOperationDto`: describe la operacion (method, collection, filter, payload) y paginacion (limit, cursor, defaultLimit, maxLimit).
 - `MessageHandler` resuelve el `connectorId` y ejecuta via `RepositoryConnectorExecutor` (beans de Spring).
-- `RepositoryMessageDto.config` es un `Map<String, String>` (ej. `uri`, `database` para Mongo).
+- `RepositoryMessageDto` puede resolver destino de dos formas:
+  - Legacy: `connectorId` + `config` (Map con `uri`, `database`, etc).
+  - Recomendado: `configRef` (o `repositoryId`) y `repository` resuelve internamente `connectorId/config`.
 
 ## Plugins
 
@@ -194,7 +192,15 @@ Propiedades obligatorias (por environment o argumentos JVM):
 - `spring.kafka.bootstrap-servers`
 - `spring.kafka.consumer.group-id`
  
-Nota: la conexion a Mongo se define en el payload (`config.uri` y `config.database`). No se requieren `app.mongo.*` en properties.
+Nota de seguridad recomendada: evita enviar credenciales en Kafka. Define targets internos y envia `configRef`/`repositoryId`.
+
+Ejemplo de target interno por properties:
+
+```
+app.repository.targets.default.connector-id=mongo
+app.repository.targets.default.config.uri=${REPOSITORY_TARGET_DEFAULT_URI}
+app.repository.targets.default.config.database=${REPOSITORY_TARGET_DEFAULT_DATABASE}
+```
 
 Propiedades con valores por defecto en `application-dev.properties` y `application-prod.properties`:
 

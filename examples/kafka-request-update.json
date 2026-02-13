@@ -3,11 +3,7 @@
   "requestId": "req-update-001",
   "from": "service-a",
   "to": "repository",
-  "connectorId": "mongo",
-  "config": {
-    "uri": "mongodb://alex:alex8080@localhost:27017/listenme?authSource=admin",
-    "database": "listenme"
-  },
+  "configRef": "default",
   "operation": {
     "method": "update",
     "collection": "users",

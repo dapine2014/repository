@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import storm.repository.com.core.adapter.inbound.service.KafkaMessageObserver;
+import storm.repository.com.core.config.RepositoryTargetRegistry;
 import storm.repository.com.core.dto.MessageType;
 import storm.repository.com.core.dto.RepositoryMessageDto;
 import storm.repository.com.core.runtime.RepositoryConnectorExecutor;
@@ -23,10 +24,16 @@ import static storm.repository.com.utils.JsonUtil.fromJson;
 public class MessageHandler {
     private final List<KafkaMessageObserver> observers = new ArrayList<>();
     private final Map<String, RepositoryConnectorExecutor> executorsById;
+    private final RepositoryTargetRegistry repositoryTargetRegistry;
+
+    public MessageHandler(List<RepositoryConnectorExecutor> executors) {
+        this(executors, null);
+    }
 
     @Autowired
-    public MessageHandler(List<RepositoryConnectorExecutor> executors) {
+    public MessageHandler(List<RepositoryConnectorExecutor> executors, RepositoryTargetRegistry repositoryTargetRegistry) {
         this.executorsById = new HashMap<>();
+        this.repositoryTargetRegistry = repositoryTargetRegistry;
         for (RepositoryConnectorExecutor executor : executors) {
             this.executorsById.put(executor.connectorId(), executor);
         }
@@ -57,12 +64,19 @@ public class MessageHandler {
             return;
         }
         if (payload.getType() == null || payload.getType() == MessageType.REQUEST) {
-            String validationError = validateRequest(payload);
-            if (validationError != null) {
-                notify(buildErrorResponse(payload, validationError));
+            RepositoryMessageDto effectivePayload;
+            try {
+                effectivePayload = resolveRequestTarget(payload);
+            } catch (IllegalArgumentException ex) {
+                notify(buildErrorResponse(payload, ex.getMessage()));
                 return;
             }
-            createAndSendResponseMessage(payload);
+            String validationError = validateRequest(effectivePayload);
+            if (validationError != null) {
+                notify(buildErrorResponse(effectivePayload, validationError));
+                return;
+            }
+            createAndSendResponseMessage(effectivePayload);
         } else {
             notify(payload);
         }
@@ -71,6 +85,30 @@ public class MessageHandler {
 
     public void logReceivedMessage(String message){
         log.info("Message received: {}", message);
+    }
+
+    private RepositoryMessageDto resolveRequestTarget(RepositoryMessageDto data) {
+        String targetRef = firstNonBlank(data.getConfigRef(), data.getRepositoryId());
+        if (targetRef == null) {
+            return data;
+        }
+        if (repositoryTargetRegistry == null) {
+            throw new IllegalArgumentException("Repository target registry is not configured");
+        }
+        if (data.getConfig() != null && !data.getConfig().isEmpty()) {
+            throw new IllegalArgumentException("config must be omitted when configRef/repositoryId is provided");
+        }
+        RepositoryTargetRegistry.ResolvedTarget resolvedTarget = repositoryTargetRegistry.resolve(targetRef);
+        if (resolvedTarget == null) {
+            throw new IllegalArgumentException("Unable to resolve repository target: " + targetRef);
+        }
+        String connectorId = firstNonBlank(data.getConnectorId(), resolvedTarget.connectorId());
+        if (connectorId == null) {
+            throw new IllegalArgumentException("Missing connectorId for repository target: " + targetRef);
+        }
+        data.setConnectorId(connectorId);
+        data.setConfig(resolvedTarget.config());
+        return data;
     }
 
     private void createAndSendResponseMessage(RepositoryMessageDto data){
@@ -122,6 +160,16 @@ public class MessageHandler {
         }
         if (data.getOperation() == null) {
             return "Missing operation";
+        }
+        return null;
+    }
+
+    private String firstNonBlank(String primary, String secondary) {
+        if (primary != null && !primary.isBlank()) {
+            return primary;
+        }
+        if (secondary != null && !secondary.isBlank()) {
+            return secondary;
         }
         return null;
     }

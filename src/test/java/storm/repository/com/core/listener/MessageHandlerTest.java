@@ -2,6 +2,8 @@ package storm.repository.com.core.listener;
 
 import org.junit.jupiter.api.Test;
 import storm.repository.com.core.adapter.inbound.service.KafkaMessageObserver;
+import storm.repository.com.core.config.RepositoryTargetProperties;
+import storm.repository.com.core.config.RepositoryTargetRegistry;
 import storm.repository.com.core.dto.MessageType;
 import storm.repository.com.core.dto.RepositoryMessageDto;
 import storm.repository.com.core.dto.RepositoryOperationDto;
@@ -131,6 +133,87 @@ class MessageHandlerTest {
         assertEquals(MessageType.RESPONSE, response.getType());
         assertEquals("ERROR", response.getStatus());
         assertEquals("Invalid JSON payload", response.getError());
+    }
+
+    @Test
+    void processMessage_resolvesConfigByConfigRef() {
+        RepositoryConnectorExecutor executor = new RepositoryConnectorExecutor() {
+            @Override
+            public String connectorId() {
+                return "mongo";
+            }
+
+            @Override
+            public Object execute(RepositoryOperationDto operation, Map<String, String> config) {
+                return Map.of("database", config.get("database"));
+            }
+        };
+
+        RepositoryTargetProperties properties = new RepositoryTargetProperties();
+        RepositoryTargetProperties.TargetConfig targetConfig = new RepositoryTargetProperties.TargetConfig();
+        targetConfig.setConnectorId("mongo");
+        targetConfig.setConfig(Map.of("uri", "mongodb://internal", "database", "storm"));
+        properties.setTargets(Map.of("default", targetConfig));
+        MessageHandler handler = new MessageHandler(List.of(executor), new RepositoryTargetRegistry(properties));
+        CapturingObserver observer = new CapturingObserver();
+        handler.addObserver(observer);
+
+        RepositoryMessageDto request = RepositoryMessageDto.builder()
+                .type(MessageType.REQUEST)
+                .requestId("req-ref-1")
+                .from("service-a")
+                .to("repository")
+                .configRef("default")
+                .operation(RepositoryOperationDto.builder().method("find").collection("users").build())
+                .build();
+
+        handler.processMessage(JsonUtil.toJson(request));
+
+        assertEquals(1, observer.messages.size());
+        RepositoryMessageDto response = observer.messages.get(0);
+        assertEquals("OK", response.getStatus());
+        assertEquals(Map.of("database", "storm"), response.getData());
+    }
+
+    @Test
+    void processMessage_rejectsConfigOverrideWhenConfigRefProvided() {
+        RepositoryConnectorExecutor executor = new RepositoryConnectorExecutor() {
+            @Override
+            public String connectorId() {
+                return "mongo";
+            }
+
+            @Override
+            public Object execute(RepositoryOperationDto operation, Map<String, String> config) {
+                return Map.of("ok", true);
+            }
+        };
+
+        RepositoryTargetProperties properties = new RepositoryTargetProperties();
+        RepositoryTargetProperties.TargetConfig targetConfig = new RepositoryTargetProperties.TargetConfig();
+        targetConfig.setConnectorId("mongo");
+        targetConfig.setConfig(Map.of("uri", "mongodb://internal", "database", "storm"));
+        properties.setTargets(Map.of("default", targetConfig));
+        MessageHandler handler = new MessageHandler(List.of(executor), new RepositoryTargetRegistry(properties));
+        CapturingObserver observer = new CapturingObserver();
+        handler.addObserver(observer);
+
+        RepositoryMessageDto request = RepositoryMessageDto.builder()
+                .type(MessageType.REQUEST)
+                .requestId("req-ref-2")
+                .from("service-a")
+                .to("repository")
+                .configRef("default")
+                .config(Map.of("uri", "mongodb://external", "database", "other"))
+                .operation(RepositoryOperationDto.builder().method("find").collection("users").build())
+                .build();
+
+        handler.processMessage(JsonUtil.toJson(request));
+
+        assertEquals(1, observer.messages.size());
+        RepositoryMessageDto response = observer.messages.get(0);
+        assertEquals("ERROR", response.getStatus());
+        assertTrue(response.getError().contains("config must be omitted"));
     }
 
     private static class CapturingObserver implements KafkaMessageObserver {

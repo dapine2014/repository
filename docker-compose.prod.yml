@@ -1,0 +1,13 @@
+services:
+  repository:
+    image: repository
+    container_name: repository-prod
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+      SPRING_CONFIG_NAME: application-prod
+    ports:
+      - "8080:8080"
+    restart: unless-stopped

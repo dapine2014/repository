@@ -1,0 +1,67 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: repository
+  namespace: default
+  labels:
+    app: repository
+    component: storm-core
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: repository
+  template:
+    metadata:
+      labels:
+        app: repository
+        component: storm-core
+    spec:
+      containers:
+        - name: repository
+          image: storm-repository:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: AMBIENTE
+              value: "dev"
+            - name: PORT
+              value: "8080"
+            - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
+              value: "192.168.49.1:29092"
+            - name: SPRING_KAFKA_CONSUMER_GROUP_ID
+              value: "repository-service"
+            - name: REPOSITORY_TARGET_DEFAULT_CONNECTOR
+              value: "mongo"
+            - name: REPOSITORY_TARGET_DEFAULT_URI
+              valueFrom:
+                secretKeyRef:
+                  name: repository-secrets
+                  key: mongo-uri
+            - name: REPOSITORY_TARGET_DEFAULT_DATABASE
+              value: "storm_data"
+            - name: REPOSITORY_ALLOW_INLINE_SENSITIVE_CONFIG
+              value: "false"
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /service/actuator/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /service/actuator/health
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 3

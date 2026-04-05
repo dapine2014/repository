@@ -1,40 +1,131 @@
 # STORM Repository
 
-Repositorio base para conectores en STORM. Implementa una arquitectura monolitica con plugins (SPI/ServiceLoader) para descubrir metadatos de conectores en tiempo de ejecucion y ejecutores inyectados por Spring.
+Servicio genérico de persistencia para la plataforma STORM. Expone operaciones de datos (find, insert, update, delete) a través de Kafka, con soporte a múltiples tecnologías de almacenamiento mediante plugins (SPI/ServiceLoader).
 
 ## Arquitectura
 
-- Monolito modular con carga dinamica de plugins (metadata) via `ServiceLoader`.
+- Monolito modular con carga dinámica de plugins via `ServiceLoader`.
 - Ejecutores por conector como beans de Spring (`RepositoryConnectorExecutor`).
 - Plugins registrados en `src/main/resources/META-INF/services`.
-- Orquestacion por Kafka: todas las solicitudes entran por topic y se responden por topic dedicado.
+- Orquestación por Kafka: todas las solicitudes entran por topic y se responden por topic dedicado.
 
 ### Carpetas principales
 
-- `src/main/java/storm/repository/com`
-  - `RepositoryApplication`: punto de entrada Spring Boot.
-- `src/main/java/storm/repository/com/core/api`
-  - Contratos base: `ConnectorPlugin`, `ConnectorType`, `ConnectorConfig`.
-- `src/main/java/storm/repository/com/core/runtime`
-  - `ConnectorRegistry`: carga plugins via `ServiceLoader`.
-  - `RepositoryConnectorExecutor`: contrato de ejecucion por conector.
-- `src/main/java/storm/repository/com/core/listener`
-  - `KafkaConsumerListener`, `MessageHandler`: entrada y ruteo de mensajes.
-- `src/main/java/storm/repository/com/core/adapter/inbound`
-  - `KafkaMessageObserver`, `KafkaMessageReception`: publicacion de respuestas.
-- `src/main/java/storm/repository/com/connectors`
-  - Implementaciones de plugins y ejecutores por tecnologia (mongo).
-- `src/main/resources/META-INF/services`
-  - Registro SPI de plugins disponibles en el classpath.
+```
+src/main/java/storm/repository/com/
+├── RepositoryApplication.java
+├── core/
+│   ├── api/          — Contratos: ConnectorPlugin, ConnectorType, ConnectorConfig
+│   ├── runtime/      — ConnectorRegistry (ServiceLoader), RepositoryConnectorExecutor
+│   ├── listener/     — KafkaConsumerListener, MessageHandler
+│   ├── adapter/      — KafkaMessageObserver, KafkaMessageReception
+│   ├── config/       — RepositoryTargetRegistry, RepositorySecurityProperties
+│   └── errors/       — Excepciones de dominio
+└── connectors/
+    └── mongo/        — Plugin + Executor + Client para MongoDB
+src/main/resources/META-INF/services/
+└── storm.repository.com.core.api.ConnectorPlugin
+```
+
+---
+
+## Despliegue (Kubernetes — Minikube)
+
+El servicio corre como `Deployment` en Kubernetes con una imagen Docker construida localmente.
+
+### Manifests (`k8s/`)
+
+```
+k8s/
+├── repository-secret.yaml      — URI de MongoDB (Secret K8s)
+├── repository-deployment.yaml  — Deployment (1 réplica)
+└── repository-service.yaml     — Service ClusterIP (puerto 8080)
+```
+
+### Build y carga en Minikube
+
+```bash
+# 1. Construir imagen
+docker build -t storm-repository:latest .
+
+# 2. Cargar en Minikube (método confiable via tar)
+docker save storm-repository:latest -o /tmp/storm-repository.tar
+minikube cp /tmp/storm-repository.tar /tmp/storm-repository.tar
+minikube ssh -- "docker rmi --force storm-repository:latest 2>/dev/null; docker load -i /tmp/storm-repository.tar"
+
+# 3. Aplicar manifests
+kubectl apply -f k8s/
+
+# 4. Verificar
+kubectl get pods -l app=repository
+kubectl rollout status deployment/repository
+```
+
+> `minikube image load` no actualiza si el tag ya existe. Usar siempre el método `docker save / docker load`.
+
+### Acceso desde el host
+
+El Service es ClusterIP (interno al cluster). Para acceder desde el host o el navegador:
+
+```bash
+kubectl port-forward svc/repository 8080:8080
+```
+
+| Endpoint | URL |
+|----------|-----|
+| Swagger UI | http://localhost:8080/service/doc/swagger-ui/index.html |
+| API Docs (OpenAPI) | http://localhost:8080/service/v3/api-docs |
+| Health (Actuator) | http://localhost:8080/service/actuator/health |
+
+### Acceso desde otros pods (dentro del cluster)
+
+Usar el DNS interno del Service:
+
+```
+http://repository:8080/service/...
+```
+
+Ejemplo desde un pod del mismo namespace:
+```bash
+curl http://repository:8080/service/actuator/health
+```
+
+---
 
 ## Kafka (request/response)
 
-- Topic de entrada (por defecto): `REPOSITORY_QUERY` (`app.kafka.topic.repository-query`)
-- Topic de respuesta (por defecto): `REPOSITORY_RESPONSE` (`app.kafka.topic.repository-response`)
-- Ejemplos listos: `examples/kafka-request-insert.json`, `examples/kafka-request-find.json`
-- Script de prueba: `scripts/kafka-request.sh`
+| Topic | Propiedad | Valor por defecto |
+|-------|-----------|-------------------|
+| Entrada | `app.kafka.topic.repository-query` | `REPOSITORY_QUERY` |
+| Respuesta | `app.kafka.topic.repository-response` | `REPOSITORY_RESPONSE` |
 
-Payload recomendado (request):
+### Modo inline — desarrollo local (`allow-inline-sensitive-config=true`)
+
+Las credenciales van en el payload. Solo válido con perfil `local`.
+
+```json
+{
+  "type": "REQUEST",
+  "requestId": "uuid-123",
+  "from": "service-a",
+  "to": "repository",
+  "connectorId": "mongo",
+  "config": {
+    "uri": "mongodb://alex:alex8080@localhost:27017/?authSource=admin",
+    "database": "storm_data"
+  },
+  "operation": {
+    "method": "find",
+    "collection": "users",
+    "filter": { "active": true },
+    "limit": 100
+  }
+}
+```
+
+### Modo configRef — Kubernetes / producción (recomendado)
+
+Las credenciales se resuelven internamente desde el Secret K8s (`REPOSITORY_TARGET_DEFAULT_URI`). El payload no trae datos sensibles.
 
 ```json
 {
@@ -47,14 +138,67 @@ Payload recomendado (request):
     "method": "find",
     "collection": "users",
     "filter": { "active": true },
-    "limit": 100,
-    "cursor": null,
-    "payload": null
+    "limit": 100
   }
 }
 ```
 
-Payload recomendado (response):
+### Ejemplos de operaciones (modo configRef)
+
+**Insert:**
+```json
+{
+  "type": "REQUEST",
+  "requestId": "req-insert-001",
+  "from": "storm-rules",
+  "to": "repository",
+  "configRef": "default",
+  "operation": {
+    "method": "insert",
+    "collection": "pedidos",
+    "payload": {
+      "cliente": "Empresa XYZ",
+      "total": 1500.00,
+      "estado": "pendiente"
+    }
+  }
+}
+```
+
+**Update:**
+```json
+{
+  "type": "REQUEST",
+  "requestId": "req-update-001",
+  "from": "storm-rules",
+  "to": "repository",
+  "configRef": "default",
+  "operation": {
+    "method": "update",
+    "collection": "pedidos",
+    "filter": { "estado": "pendiente" },
+    "payload": { "estado": "procesado" }
+  }
+}
+```
+
+**Delete:**
+```json
+{
+  "type": "REQUEST",
+  "requestId": "req-delete-001",
+  "from": "storm-rules",
+  "to": "repository",
+  "configRef": "default",
+  "operation": {
+    "method": "delete",
+    "collection": "pedidos",
+    "filter": { "_id": "65b9f0e3c2a1b2c3d4e5f678" }
+  }
+}
+```
+
+### Payload response
 
 ```json
 {
@@ -65,7 +209,7 @@ Payload recomendado (response):
   "to": "service-a",
   "status": "OK",
   "data": {
-    "items": [ ... ],
+    "items": [ ],
     "nextCursor": "65b9f0e3c2a1b2c3d4e5f678",
     "totalCount": 1234
   },
@@ -73,161 +217,147 @@ Payload recomendado (response):
 }
 ```
 
-Ejecutar prueba (insert / find):
+### Enviar mensajes desde el host (Kafka en Docker)
 
+```bash
+# find
+echo '{"type":"REQUEST","requestId":"test-001","from":"cli","to":"repository","configRef":"default","operation":{"method":"find","collection":"users","filter":{},"limit":10}}' | \
+  docker exec -i storm-kafka kafka-console-producer \
+    --broker-list localhost:9092 \
+    --topic REPOSITORY_QUERY
+
+# Escuchar la respuesta
+docker exec storm-kafka kafka-console-consumer \
+  --bootstrap-server localhost:9092 \
+  --topic REPOSITORY_RESPONSE \
+  --from-beginning \
+  --max-messages 1
 ```
-./scripts/kafka-request.sh examples/kafka-request-insert.json
-./scripts/kafka-request.sh examples/kafka-request-find.json
+
+### Enviar mensajes desde un pod dentro del cluster
+
+```bash
+# Abrir shell temporal con acceso a Kafka
+kubectl run kafka-client --rm -it --restart=Never \
+  --image=confluentinc/cp-kafka:7.4.4 -- bash
+
+# Dentro del pod:
+echo '{"type":"REQUEST","requestId":"k8s-test-001","from":"pod-cli","to":"repository","configRef":"default","operation":{"method":"find","collection":"users","filter":{},"limit":5}}' | \
+  kafka-console-producer \
+    --broker-list 192.168.49.1:29092 \
+    --topic REPOSITORY_QUERY
+
+kafka-console-consumer \
+  --bootstrap-server 192.168.49.1:29092 \
+  --topic REPOSITORY_RESPONSE \
+  --from-beginning \
+  --max-messages 1 \
+  --timeout-ms 10000
 ```
 
-## DTOs y flujo
+---
 
-- `RepositoryMessageDto`: sobre unico para request/response.
-- `RepositoryOperationDto`: describe la operacion (method, collection, filter, payload) y paginacion (limit, cursor, defaultLimit, maxLimit).
-- `MessageHandler` resuelve el `connectorId` y ejecuta via `RepositoryConnectorExecutor` (beans de Spring).
-- `RepositoryMessageDto` puede resolver destino de dos formas:
-  - Legacy: `connectorId` + `config` (Map con `uri`, `database`, etc).
-  - Recomendado: `configRef` (o `repositoryId`) y `repository` resuelve internamente `connectorId/config`.
+## Paginación (MongoDB)
+
+El `find` soporta cursor por `_id`. El cursor de la siguiente página viene en la respuesta como `nextCursor`.
+
+```json
+// Página 1
+{ "method": "find", "collection": "pedidos", "filter": {}, "limit": 50 }
+
+// Página 2 — usar nextCursor de la respuesta anterior
+{ "method": "find", "collection": "pedidos", "filter": {}, "limit": 50, "cursor": "65b9f0e3c2a1b2c3d4e5f678" }
+```
+
+- Sin `limit`: usa `defaultLimit` (200 registros).
+- Máximo absoluto: 100.000 registros.
+
+---
+
+## Perfiles de configuración
+
+Controlado con la variable de entorno `AMBIENTE` (default: `local`):
+
+| Perfil | `AMBIENTE` | Puerto | Descripción |
+|--------|------------|--------|-------------|
+| `local` | `local` (default) | 33000 | Valores hardcoded, inline-config habilitado, sin K8s |
+| `dev` | `dev` | 8080 | Variables de entorno, para Minikube / Docker |
+| `prod` | `prod` | 8080 | Variables de entorno, credenciales via Secret K8s / Vault |
+
+### Perfil local
+
+```properties
+server.port=33000
+server.servlet.context-path=/service
+spring.kafka.bootstrap-servers=localhost:29092
+spring.kafka.consumer.group-id=repository-service
+app.security.allow-inline-sensitive-config=true
+```
+
+```bash
+# Levantar local
+./mvnw spring-boot:run
+# Swagger: http://localhost:33000/service/doc/swagger-ui/index.html
+```
+
+### Perfil dev / prod (variables de entorno)
+
+```bash
+AMBIENTE=dev
+PORT=8080
+SPRING_KAFKA_BOOTSTRAP_SERVERS=192.168.49.1:29092
+SPRING_KAFKA_CONSUMER_GROUP_ID=repository-service
+REPOSITORY_TARGET_DEFAULT_CONNECTOR=mongo
+REPOSITORY_TARGET_DEFAULT_URI=mongodb://user:pass@host:27017/?authSource=admin
+REPOSITORY_TARGET_DEFAULT_DATABASE=storm_data
+REPOSITORY_ALLOW_INLINE_SENSITIVE_CONFIG=false
+```
+
+---
+
+## Seguridad
+
+| Modo | `allow-inline-sensitive-config` | Descripción |
+|------|---------------------------------|-------------|
+| `local` | `true` | Credenciales permitidas en el payload Kafka |
+| `dev` / `prod` | `false` | Solo `configRef` — credenciales en Secret K8s |
+
+> **Nunca** activar `allow-inline-sensitive-config=true` en `dev` ni `prod`.
+
+---
 
 ## Plugins
 
-Un plugin implementa `ConnectorPlugin` y se registra en `META-INF/services/storm.repository.com.core.api.ConnectorPlugin`.
-
-Ejemplo (MongoDB):
+Implementa `ConnectorPlugin` y registra en `META-INF/services`:
 
 ```java
 public final class MongoConnectorPlugin implements ConnectorPlugin {
-    public String id() { return "mongo"; }
+    public String id()          { return "mongo"; }
     public String displayName() { return "MongoDB"; }
-    public String version() { return "1.0.0"; }
+    public String version()     { return "1.0.0"; }
     public ConnectorType type() { return ConnectorType.SOURCE; }
 }
 ```
 
-## MongoDB (driver y conexion)
-
-Se incluyo el driver `mongodb-driver-sync` y un modulo de conexion real:
-
-- `MongoConnectorConfig`: requiere `uri` y `database`.
-- `MongoConnectorClient`: crea el cliente y valida conexion con `ping`.
-- `MongoConnectorExecutor`: ejecuta operaciones (`find`, `insert`, `update`, `delete`) segun el payload Kafka.
-
-Uso minimo:
-
-```java
-Map<String, String> props = Map.of(
-    "uri", "mongodb://user:pass@localhost:27017",
-    "database", "listenme"
-);
-ConnectorConfig cfg = new ConnectorConfig(props);
-MongoConnectorConfig mongoCfg = new MongoConnectorConfig(cfg);
-MongoConnectorClient.validateConnection(mongoCfg);
+Registro en `META-INF/services/storm.repository.com.core.api.ConnectorPlugin`:
+```
+storm.repository.com.connectors.mongo.MongoConnectorPlugin
 ```
 
-Operaciones (ejemplo):
+Para agregar un nuevo conector:
+1. Crear clase en `connectors/<nombre>/`.
+2. Implementar `ConnectorPlugin` + `RepositoryConnectorExecutor`.
+3. Registrar en `META-INF/services`.
 
-```json
-{
-  "operation": {
-    "method": "insert",
-    "collection": "users",
-    "payload": { "name": "Ana", "active": true }
-  }
-}
-```
-
-## Paginacion (Mongo)
-
-El `find` soporta cursor por `_id` y limite de resultados. El cursor se devuelve en la respuesta como `nextCursor`, para que el cliente lo use en la siguiente pagina.
-
-Ejemplo (pagina 1):
-
-```json
-{
-  "operation": {
-    "method": "find",
-    "collection": "users",
-    "filter": {},
-    "limit": 100
-  }
-}
-```
-
-Respuesta:
-
-```json
-{
-  "data": {
-    "items": [ ... ],
-    "nextCursor": "65b9f0e3c2a1b2c3d4e5f678",
-    "totalCount": 1234
-  }
-}
-```
-
-Ejemplo (pagina 2 con cursor):
-
-```json
-{
-  "operation": {
-    "method": "find",
-    "collection": "users",
-    "filter": {},
-    "limit": 100,
-    "cursor": "65b9f0e3c2a1b2c3d4e5f678"
-  }
-}
-```
-
-Limites:
-
-- Si no se envia `limit`, se usa `defaultLimit` (por defecto 200).
-- Se puede enviar `maxLimit` para controlar el maximo permitido (por defecto 5000).
-- El sistema aplica un maximo absoluto (100000) para evitar consultas excesivas.
-
-## Configuracion requerida
-
-Propiedades obligatorias (por environment o argumentos JVM):
-
-- `spring.kafka.bootstrap-servers`
-- `spring.kafka.consumer.group-id`
- 
-Nota de seguridad recomendada: evita enviar credenciales en Kafka. Define targets internos y envia `configRef`/`repositoryId`.
-
-Ejemplo de target interno por properties:
-
-```
-app.repository.targets.default.connector-id=mongo
-app.repository.targets.default.config.uri=${REPOSITORY_TARGET_DEFAULT_URI}
-app.repository.targets.default.config.database=${REPOSITORY_TARGET_DEFAULT_DATABASE}
-```
-
-Propiedades con valores por defecto en `application-dev.properties` y `application-prod.properties`:
-
-- `app.kafka.topic.repository-query=REPOSITORY_QUERY`
-- `app.kafka.topic.repository-response=REPOSITORY_RESPONSE`
-
-Nota: el profile activo por defecto es `local`, pero no existe `application-local.properties`. Debes definir las propiedades anteriores via variables de entorno o cambiar el profile.
-
-## Como agregar un nuevo plugin
-
-1. Crear una clase en `src/main/java/storm/repository/com/connectors/<tu_conector>`.
-2. Implementar `ConnectorPlugin`.
-3. Registrar la clase en `META-INF/services/storm.repository.com.core.api.ConnectorPlugin`.
-4. Implementar un `RepositoryConnectorExecutor` si el conector debe ser ejecutable.
-5. Opcional: crear un config wrapper y un client de conexion.
-
-Actualmente solo Mongo tiene executor. El plugin de MySQL existe como metadata pero no hay executor.
+---
 
 ## Dependencias
 
-- Java 21
-- Spring Boot 4.0.1
-- Spring Kafka
-- MongoDB driver sync
-
-## Desarrollo
-
-```
-./mvnw spring-boot:run
-```
+| Librería | Versión |
+|----------|---------|
+| Java | 17 |
+| Spring Boot | 4.0.1 |
+| Spring Kafka | 3.2.0 |
+| MongoDB Driver Sync | (BOM Spring Boot) |
+| springdoc-openapi | 2.1.0 |
+| Hibernate Validator | 8.0.0 |

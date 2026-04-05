@@ -3,13 +3,15 @@
   "requestId": "req-find-001",
   "from": "tester",
   "to": "repository",
-  "configRef": "default",
+  "connectorId": "mongo",
+  "config": {
+    "uri": "mongodb://alex:alex8080@localhost:27017/?authSource=admin",
+    "database": "storm_data"
+  },
   "operation": {
     "method": "find",
     "collection": "users",
-    "filter": {
-      "name": "Ana"
-    },
+    "filter": { "name": "Ana" },
     "payload": null
   }
 }

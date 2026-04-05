@@ -24,7 +24,8 @@ timeout "${TIMEOUT_SECONDS}s" docker run --rm --network host confluentinc/cp-kaf
 CONSUMER_PID=$!
 sleep 1
 
-cat "$REQUEST_FILE" | docker run --rm --network host -i confluentinc/cp-kafka:7.4.4 \
+python3 -c "import sys,json; print(json.dumps(json.load(sys.stdin)))" < "$REQUEST_FILE" | \
+  docker run --rm --network host -i confluentinc/cp-kafka:7.4.4 \
   kafka-console-producer --bootstrap-server "$BROKER" --topic "$REQUEST_TOPIC"
 
 wait $CONSUMER_PID

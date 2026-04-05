@@ -1,0 +1,13 @@
+services:
+  repository:
+    image: repository
+    container_name: repository-dev
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      SPRING_PROFILES_ACTIVE: dev
+      SPRING_CONFIG_NAME: application-dev
+    ports:
+      - "8081:8080"
+    restart: unless-stopped

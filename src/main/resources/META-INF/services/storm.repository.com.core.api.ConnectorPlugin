@@ -1,0 +1,2 @@
+storm.repository.com.connectors.mysql.MysqlConnectorPlugin
+storm.repository.com.connectors.mongo.MongoConnectorPlugin

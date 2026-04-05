@@ -1,0 +1,21 @@
+{
+  "type": "REQUEST",
+  "requestId": "req-insert-001",
+  "from": "tester",
+  "to": "repository",
+  "connectorId": "mongo",
+  "config": {
+    "uri": "mongodb://alex:alex8080@localhost:27017/?authSource=admin",
+    "database": "storm_data"
+  },
+  "operation": {
+    "method": "insert",
+    "collection": "users",
+    "payload": {
+      "name": "Ana",
+      "lastname": "pedro",
+      "email": "acme186@hotmail.com",
+      "active": true
+    }
+  }
+}

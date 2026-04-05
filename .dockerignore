@@ -1,0 +1,23 @@
+# Build artifacts
+/target
+
+# Maven wrapper / local repo
+/.mvn
+/mvnw
+/mvnw.cmd
+
+# IDE /
+/.idea
+/*.iml
+/.classpath
+/.project
+/.settings
+/.vscode
+.DS_Store
+
+# Logs
+*.log
+
+# example
+/examples
+

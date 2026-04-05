@@ -1,5 +1,6 @@
 HELP.md
 target/
+k8s/repository-secret.yaml
 .mvn/wrapper/maven-wrapper.jar
 !**/src/main/**/target/
 !**/src/test/**/target/

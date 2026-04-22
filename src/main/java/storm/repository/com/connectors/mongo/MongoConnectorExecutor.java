@@ -16,6 +16,7 @@ import storm.repository.com.core.runtime.RepositoryConnectorExecutor;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -36,9 +37,13 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
 
         try (MongoClient client = MongoConnectorClient.createClient(mongoConfig)) {
             MongoDatabase database = client.getDatabase(mongoConfig.database());
-            MongoCollection<Document> collection = database.getCollection(operation.getCollection());
             String method = operation.getMethod().toLowerCase();
 
+            if ("list_schema".equals(method)) {
+                return listSchema(database);
+            }
+
+            MongoCollection<Document> collection = database.getCollection(operation.getCollection());
             return switch (method) {
                 case "find" -> find(collection, operation);
                 case "insert" -> insert(collection, operation);
@@ -56,9 +61,20 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
         if (operation.getMethod() == null || operation.getMethod().isBlank()) {
             throw new IllegalArgumentException("Missing operation.method");
         }
-        if (operation.getCollection() == null || operation.getCollection().isBlank()) {
+        if (!"list_schema".equals(operation.getMethod().toLowerCase()) &&
+                (operation.getCollection() == null || operation.getCollection().isBlank())) {
             throw new IllegalArgumentException("Missing operation.collection");
         }
+    }
+
+    private List<Map<String, Object>> listSchema(MongoDatabase database) {
+        List<Map<String, Object>> result = new ArrayList<>();
+        for (String name : database.listCollectionNames()) {
+            Map<String, Object> entry = new HashMap<>();
+            entry.put("name", name);
+            result.add(entry);
+        }
+        return result;
     }
 
     private Object find(MongoCollection<Document> collection, RepositoryOperationDto operation) {
@@ -72,11 +88,7 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
         List<Document> results = query.into(new ArrayList<>());
         String nextCursor = extractNextCursor(results);
         long totalCount = collection.countDocuments(toDocument(operation.getFilter()));
-        return Map.of(
-                "items", results,
-                "nextCursor", nextCursor,
-                "totalCount", totalCount
-        );
+        return results;
     }
 
     private Object insert(MongoCollection<Document> collection, RepositoryOperationDto operation) {

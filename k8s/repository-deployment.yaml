@@ -43,7 +43,7 @@ spec:
             - name: REPOSITORY_TARGET_DEFAULT_DATABASE
               value: "storm_data"
             - name: REPOSITORY_ALLOW_INLINE_SENSITIVE_CONFIG
-              value: "false"
+              value: "true"
           resources:
             requests:
               cpu: "200m"

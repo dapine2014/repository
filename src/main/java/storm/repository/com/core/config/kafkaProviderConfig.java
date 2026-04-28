@@ -16,27 +16,44 @@ import java.util.Map;
 public class kafkaProviderConfig {
 
     @Value("${spring.kafka.bootstrap-servers}")
-    private String boostrapServer;
+    private String bootstrapServers;
 
-    public Map<String,Object> producerConfig(){
-        Map<String,Object> properties = new HashMap<>();
-        properties.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, boostrapServer);
-        properties.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
-        properties.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+    @Value("${spring.kafka.properties.security.protocol:PLAINTEXT}")
+    private String securityProtocol;
 
-        return properties;
+    @Value("${spring.kafka.properties.ssl.truststore.location:}")
+    private String sslTruststoreLocation;
+
+    @Value("${spring.kafka.properties.ssl.truststore.password:}")
+    private String sslTruststorePassword;
+
+    public Map<String, Object> producerConfig() {
+        Map<String, Object> props = new HashMap<>();
+        props.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+        props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
+
+        if (!"PLAINTEXT".equalsIgnoreCase(securityProtocol)) {
+            props.put("security.protocol", securityProtocol);
+            if (!sslTruststoreLocation.isBlank()) {
+                props.put("ssl.truststore.location", sslTruststoreLocation);
+            }
+            if (!sslTruststorePassword.isBlank()) {
+                props.put("ssl.truststore.password", sslTruststorePassword);
+            }
+            props.put("ssl.endpoint.identification.algorithm", "");
+        }
+
+        return props;
     }
 
     @Bean
-    public ProducerFactory<String, String> providerFactory(){
-
+    public ProducerFactory<String, String> providerFactory() {
         return new DefaultKafkaProducerFactory<>(producerConfig());
     }
 
     @Bean
-    public KafkaTemplate<String, String> kafkaTemplate(ProducerFactory<String, String> producerFactory){
-
+    public KafkaTemplate<String, String> kafkaTemplate(ProducerFactory<String, String> producerFactory) {
         return new KafkaTemplate<>(producerFactory);
     }
-
 }

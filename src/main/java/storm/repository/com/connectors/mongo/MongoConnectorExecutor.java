@@ -88,6 +88,7 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
         List<Document> results = query.into(new ArrayList<>());
         String nextCursor = extractNextCursor(results);
         long totalCount = collection.countDocuments(toDocument(operation.getFilter()));
+        results.forEach(doc -> doc.remove("_id"));
         return results;
     }
 

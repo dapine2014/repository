@@ -18,32 +18,53 @@ import java.util.Map;
 @Configuration
 @EnableKafka
 public class KafkaConsumerConfig {
+
     @Value("${spring.kafka.bootstrap-servers}")
-    private String boostrapServer;
+    private String bootstrapServers;
+
     @Value("${spring.kafka.consumer.group-id}")
     private String groupId;
 
-    public Map<String,Object> consumerConfig(){
-        Map<String,Object> properties = new HashMap<>();
-        properties.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, boostrapServer);
-        properties.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-        properties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
-        properties.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
+    @Value("${spring.kafka.properties.security.protocol:PLAINTEXT}")
+    private String securityProtocol;
 
-        return properties;
+    @Value("${spring.kafka.properties.ssl.truststore.location:}")
+    private String sslTruststoreLocation;
+
+    @Value("${spring.kafka.properties.ssl.truststore.password:}")
+    private String sslTruststorePassword;
+
+    public Map<String, Object> consumerConfig() {
+        Map<String, Object> props = new HashMap<>();
+        props.put(ConsumerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
+        props.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
+        props.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
+
+        if (!"PLAINTEXT".equalsIgnoreCase(securityProtocol)) {
+            props.put("security.protocol", securityProtocol);
+            if (!sslTruststoreLocation.isBlank()) {
+                props.put("ssl.truststore.location", sslTruststoreLocation);
+            }
+            if (!sslTruststorePassword.isBlank()) {
+                props.put("ssl.truststore.password", sslTruststorePassword);
+            }
+            props.put("ssl.endpoint.identification.algorithm", "");
+        }
+
+        return props;
     }
 
     @Bean
-    public ConsumerFactory<String, String> consumerFactory(){
-
+    public ConsumerFactory<String, String> consumerFactory() {
         return new DefaultKafkaConsumerFactory<>(consumerConfig());
     }
 
     @Bean(name = "kafkaListenerContainerFactory")
-    public KafkaListenerContainerFactory<ConcurrentMessageListenerContainer<String, String>> kafkaListenerContainerFactory(){
-        ConcurrentKafkaListenerContainerFactory<String, String> containerFactory = new ConcurrentKafkaListenerContainerFactory<>();
-        containerFactory.setConsumerFactory(consumerFactory());
-
-        return containerFactory;
+    public KafkaListenerContainerFactory<ConcurrentMessageListenerContainer<String, String>> kafkaListenerContainerFactory() {
+        ConcurrentKafkaListenerContainerFactory<String, String> factory =
+                new ConcurrentKafkaListenerContainerFactory<>();
+        factory.setConsumerFactory(consumerFactory());
+        return factory;
     }
 }

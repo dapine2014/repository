@@ -16,6 +16,7 @@ import storm.repository.com.core.runtime.RepositoryConnectorExecutor;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
@@ -36,9 +37,13 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
 
         try (MongoClient client = MongoConnectorClient.createClient(mongoConfig)) {
             MongoDatabase database = client.getDatabase(mongoConfig.database());
-            MongoCollection<Document> collection = database.getCollection(operation.getCollection());
             String method = operation.getMethod().toLowerCase();
 
+            if ("list_schema".equals(method)) {
+                return listSchema(database);
+            }
+
+            MongoCollection<Document> collection = database.getCollection(operation.getCollection());
             return switch (method) {
                 case "find" -> find(collection, operation);
                 case "insert" -> insert(collection, operation);
@@ -56,7 +61,9 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
         if (operation.getMethod() == null || operation.getMethod().isBlank()) {
             throw new IllegalArgumentException("Missing operation.method");
         }
-        if (operation.getCollection() == null || operation.getCollection().isBlank()) {
+        String method = operation.getMethod().toLowerCase();
+        if (!"list_schema".equals(method) &&
+                (operation.getCollection() == null || operation.getCollection().isBlank())) {
             throw new IllegalArgumentException("Missing operation.collection");
         }
     }
@@ -69,14 +76,32 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
         int maxLimit = resolveMaxLimit(operation, defaultLimit);
         int effectiveLimit = resolveEffectiveLimit(limit, defaultLimit, maxLimit);
         query = query.limit(effectiveLimit);
-        List<Document> results = query.into(new ArrayList<>());
-        String nextCursor = extractNextCursor(results);
-        long totalCount = collection.countDocuments(toDocument(operation.getFilter()));
-        return Map.of(
-                "items", results,
-                "nextCursor", nextCursor,
-                "totalCount", totalCount
-        );
+        List<Map<String, Object>> results = new ArrayList<>();
+        for (Document doc : query) {
+            Map<String, Object> row = new LinkedHashMap<>(doc);
+            if (row.get("_id") instanceof ObjectId oid) {
+                row.put("_id", oid.toHexString());
+            }
+            results.add(row);
+        }
+        return results;
+    }
+
+    private Object listSchema(MongoDatabase database) {
+        List<Map<String, Object>> tables = new ArrayList<>();
+        for (String collectionName : database.listCollectionNames()) {
+            List<Map<String, Object>> columns = new ArrayList<>();
+            Document sample = database.getCollection(collectionName).find().first();
+            if (sample != null) {
+                for (Map.Entry<String, Object> field : sample.entrySet()) {
+                    String type = field.getValue() == null ? "unknown"
+                            : field.getValue().getClass().getSimpleName();
+                    columns.add(Map.of("name", field.getKey(), "type", type));
+                }
+            }
+            tables.add(Map.of("name", collectionName, "columns", columns));
+        }
+        return tables;
     }
 
     private Object insert(MongoCollection<Document> collection, RepositoryOperationDto operation) {
@@ -144,18 +169,6 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
         } catch (IllegalArgumentException ex) {
             throw new IllegalArgumentException("Invalid cursor; expected Mongo ObjectId hex string");
         }
-    }
-
-    private String extractNextCursor(List<Document> results) {
-        if (results == null || results.isEmpty()) {
-            return null;
-        }
-        Document last = results.get(results.size() - 1);
-        Object id = last.get("_id");
-        if (id instanceof ObjectId objectId) {
-            return objectId.toHexString();
-        }
-        return id == null ? null : id.toString();
     }
 
     private int resolveDefaultLimit(RepositoryOperationDto operation) {

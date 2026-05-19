@@ -1,2 +1,3 @@
 storm.repository.com.connectors.mysql.MysqlConnectorPlugin
 storm.repository.com.connectors.mongo.MongoConnectorPlugin
+storm.repository.com.connectors.postgres.PostgresConnectorPlugin

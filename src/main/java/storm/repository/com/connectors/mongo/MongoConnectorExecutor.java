@@ -3,6 +3,7 @@ package storm.repository.com.connectors.mongo;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
+import com.mongodb.client.model.ReplaceOptions;
 import com.mongodb.client.result.DeleteResult;
 import com.mongodb.client.result.InsertManyResult;
 import com.mongodb.client.result.InsertOneResult;
@@ -19,6 +20,8 @@ import java.util.Arrays;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 
 @Component
 public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
@@ -30,6 +33,8 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
         return "mongo";
     }
 
+    private static final Set<String> NO_COLLECTION_METHODS = Set.of("list_schema", "drop_database");
+
     @Override
     public Object execute(RepositoryOperationDto operation, Map<String, String> config) {
         MongoConnectorConfig mongoConfig = new MongoConnectorConfig(new ConnectorConfig(config));
@@ -39,16 +44,15 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
             MongoDatabase database = client.getDatabase(mongoConfig.database());
             String method = operation.getMethod().toLowerCase();
 
-            if ("list_schema".equals(method)) {
-                return listSchema(database);
-            }
-
-            MongoCollection<Document> collection = database.getCollection(operation.getCollection());
             return switch (method) {
-                case "find" -> find(collection, operation);
-                case "insert" -> insert(collection, operation);
-                case "update" -> update(collection, operation);
-                case "delete" -> delete(collection, operation);
+                case "list_schema"     -> listSchema(database);
+                case "drop_database"   -> dropDatabase(database, mongoConfig.database());
+                case "drop_collection" -> dropCollection(database, operation.getCollection());
+                case "save"            -> save(database.getCollection(operation.getCollection()), operation);
+                case "find"            -> find(database.getCollection(operation.getCollection()), operation);
+                case "insert"          -> insert(database.getCollection(operation.getCollection()), operation);
+                case "update"          -> update(database.getCollection(operation.getCollection()), operation);
+                case "delete"          -> delete(database.getCollection(operation.getCollection()), operation);
                 default -> throw new IllegalArgumentException("Unsupported method: " + operation.getMethod());
             };
         }
@@ -62,9 +66,39 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
             throw new IllegalArgumentException("Missing operation.method");
         }
         String method = operation.getMethod().toLowerCase();
-        if (!"list_schema".equals(method) &&
+        if (!NO_COLLECTION_METHODS.contains(method) &&
                 (operation.getCollection() == null || operation.getCollection().isBlank())) {
             throw new IllegalArgumentException("Missing operation.collection");
+        }
+    }
+
+    private Object dropDatabase(MongoDatabase database, String dbName) {
+        database.drop();
+        return Map.of("dropped", dbName);
+    }
+
+    private Object dropCollection(MongoDatabase database, String collectionName) {
+        database.getCollection(collectionName).drop();
+        return Map.of("dropped", collectionName);
+    }
+
+    private Object save(MongoCollection<Document> collection, RepositoryOperationDto operation) {
+        Map<String, Object> map = asMap(operation.getPayload(), "payload");
+        Object idVal = map.get("_id");
+        Document doc = new Document(map);
+
+        if (idVal != null && !idVal.toString().isBlank()) {
+            Object resolvedId = resolveId(idVal.toString());
+            collection.replaceOne(
+                    new Document("_id", resolvedId),
+                    doc,
+                    new ReplaceOptions().upsert(true));
+            return Map.of("_id", idVal.toString());
+        } else {
+            String newId = UUID.randomUUID().toString();
+            doc.put("_id", newId);
+            collection.insertOne(doc);
+            return Map.of("_id", newId);
         }
     }
 
@@ -123,7 +157,7 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
     }
 
     private Object update(MongoCollection<Document> collection, RepositoryOperationDto operation) {
-        Document filter = toDocument(operation.getFilter());
+        Document filter = toFilterDocument(operation.getFilter());
         Map<String, Object> updateFields = asMap(operation.getPayload(), "operation.payload");
         UpdateResult result = collection.updateMany(filter, new Document("$set", updateFields));
         return Map.of(
@@ -133,9 +167,19 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
     }
 
     private Object delete(MongoCollection<Document> collection, RepositoryOperationDto operation) {
-        Document filter = toDocument(operation.getFilter());
+        Document filter = toFilterDocument(operation.getFilter());
         DeleteResult result = collection.deleteMany(filter);
         return Map.of("deletedCount", result.getDeletedCount());
+    }
+
+    // Convierte un string _id de 24 hex chars a ObjectId para compatibilidad
+    // con documentos creados por Spring Data MongoDB (que usa ObjectId nativo).
+    // IDs UUID (36 chars con guiones) se devuelven sin cambio.
+    private Object resolveId(String s) {
+        if (s != null && s.length() == 24) {
+            try { return new ObjectId(s); } catch (IllegalArgumentException ignored) {}
+        }
+        return s;
     }
 
     private Document toDocument(Map<String, Object> map) {
@@ -145,8 +189,15 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
         return new Document(map);
     }
 
+    private Document toFilterDocument(Map<String, Object> map) {
+        Document doc = toDocument(map);
+        Object id = doc.get("_id");
+        if (id instanceof String s) doc.put("_id", resolveId(s));
+        return doc;
+    }
+
     private Document buildFindFilter(RepositoryOperationDto operation) {
-        Document baseFilter = toDocument(operation.getFilter());
+        Document baseFilter = toFilterDocument(operation.getFilter());
         String cursor = operation.getCursor();
         if (cursor == null || cursor.isBlank()) {
             return baseFilter;

@@ -20,7 +20,9 @@ mvn test -Dtest=ClassName#method  # run one test method
 
 Local Swagger: `http://localhost:33000/service/doc/swagger-ui/index.html`
 
-The profile is selected by the `AMBIENTE` env var (default: `local`). The `local` profile connects to Kafka at `localhost:29092` with `app.security.allow-inline-sensitive-config=true`. Only `local`, `dev`, and `prod` profiles exist (no `qa` profile in this service).
+The profile is selected by the `AMBIENTE` env var (default: `local`). The `local` profile connects to Kafka at `localhost:9092` (plaintext, host-side port — not the 29092 SSL port used by K8s pods in `dev`/`prod`) with `app.security.allow-inline-sensitive-config=true`. Only `local`, `dev`, and `prod` profiles exist (no `qa` profile in this service).
+
+> **Gotcha**: `app.security.allow-inline-sensitive-config` in the `dev` profile is `${REPOSITORY_ALLOW_INLINE_SENSITIVE_CONFIG:true}` — it defaults to `true` unless the env var is explicitly set to `false` in the K8s deployment. Only `prod` defaults the property itself to `false`. Don't assume `dev` blocks inline sensitive config unless you've checked the actual deployed env var.
 
 Unlike the other STORM Java services, this module has real unit tests (not just a Spring-context smoke test) — see `src/test/java/storm/repository/com/core/listener/MessageHandlerTest.java` for the security/configRef/observer behavior and `ConnectorRegistryTest.java` for ServiceLoader discovery. Sample Kafka request payloads for manual testing live in `examples/*.json`.
 

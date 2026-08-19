@@ -4,6 +4,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import storm.repository.com.core.dto.RepositoryOperationDto;
 import storm.repository.com.core.runtime.RepositoryConnectorExecutor;
+import storm.repository.com.core.util.SshTunnelManager;
+import storm.repository.com.core.util.TunneledConnection;
 
 import java.sql.*;
 import java.util.*;
@@ -259,12 +261,16 @@ public class OracleConnectorExecutor implements RepositoryConnectorExecutor {
         String database = required(config, "database");
         String username = required(config, "username");
         String password = required(config, "password");
+
+        SshTunnelManager.ResolvedEndpoint endpoint =
+                SshTunnelManager.resolve(config, host, Integer.parseInt(port));
         // Soporta tanto SID (jdbc:oracle:thin:@host:port:SID)
         // como Service Name (jdbc:oracle:thin:@//host:port/service)
         String url = database.contains("/")
-                ? String.format("jdbc:oracle:thin:@//%s:%s/%s", host, port, database)
-                : String.format("jdbc:oracle:thin:@%s:%s:%s", host, port, database);
-        return DriverManager.getConnection(url, username, password);
+                ? String.format("jdbc:oracle:thin:@//%s:%s/%s", endpoint.host(), endpoint.port(), database)
+                : String.format("jdbc:oracle:thin:@%s:%s:%s", endpoint.host(), endpoint.port(), database);
+        Connection raw = DriverManager.getConnection(url, username, password);
+        return TunneledConnection.wrap(raw, endpoint);
     }
 
     private void buildWhereClause(Map<String, Object> filter, StringBuilder sql, List<Object> params) {

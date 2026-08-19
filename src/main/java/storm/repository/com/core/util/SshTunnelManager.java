@@ -41,10 +41,11 @@ public final class SshTunnelManager {
 
         Exception lastError = null;
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+            Session session = null;
             try {
                 JSch jsch = new JSch();
                 jsch.addIdentity("storm-bastion", pemKey.getBytes(StandardCharsets.UTF_8), null, null);
-                Session session = jsch.getSession(bastionUser, bastionHost, bastionPort);
+                session = jsch.getSession(bastionUser, bastionHost, bastionPort);
                 session.setConfig("StrictHostKeyChecking", "no");
                 session.connect(CONNECT_TIMEOUT_MS);
                 int localPort = session.setPortForwardingL(0, remoteHost, remotePort);
@@ -53,14 +54,48 @@ public final class SshTunnelManager {
                 return tunneled(session, localPort);
             } catch (Exception e) {
                 lastError = e;
+                if (session != null && session.isConnected()) {
+                    session.disconnect();
+                }
                 log.warn("Intento {}/{} de túnel SSH a {} falló: {}", attempt, MAX_ATTEMPTS, bastionHost, e.getMessage());
                 if (attempt < MAX_ATTEMPTS) {
                     sleep(RETRY_BACKOFF_MS);
                 }
             }
         }
-        throw new IllegalStateException(
-                "No se pudo establecer el túnel SSH al bastion " + bastionHost + ":" + bastionPort, lastError);
+        throw new IllegalStateException(classifyError(bastionHost, bastionPort, lastError), lastError);
+    }
+
+    /**
+     * Clasifica la causa del fallo de túnel SSH en un mensaje específico y
+     * legible por el usuario final (que puede estar mirando un spinner en el
+     * wizard de storm-ui), en lugar de un mensaje genérico único para todos
+     * los casos. Réplica en Java del espíritu de `_friendly_tunnel_error()`
+     * en el sandbox Python (`tunnel_manager.py`).
+     */
+    private static String classifyError(String bastionHost, int bastionPort, Exception lastError) {
+        String target = bastionHost + ":" + bastionPort;
+        String detail = lastError == null ? "" : String.valueOf(lastError.getMessage());
+        String lower = detail.toLowerCase();
+
+        if (lower.contains("auth fail") || lower.contains("authentication failed") || lower.contains("permission denied")) {
+            return "No se pudo autenticar contra el bastion SSH " + target
+                    + " — verifique el usuario y la llave privada configurados.";
+        }
+        if (lower.contains("unknownhostexception") || lower.contains("unknown host")
+                || lower.contains("nodename nor servname provided") || lower.contains("name or service not known")) {
+            return "No se pudo resolver el host del bastion SSH " + target
+                    + " — verifique que el nombre/dirección sea correcto.";
+        }
+        if (lower.contains("connection refused")) {
+            return "Conexión rechazada por el bastion SSH " + target
+                    + " — verifique que el servicio SSH esté activo y el puerto sea correcto.";
+        }
+        if (lower.contains("timeout") || lower.contains("timed out")) {
+            return "Tiempo de espera agotado al conectar con el bastion SSH " + target
+                    + " — verifique conectividad de red y reglas de firewall/security group.";
+        }
+        return "No se pudo establecer el túnel SSH al bastion " + target;
     }
 
     private static ResolvedEndpoint direct(String host, int port) {

@@ -4,6 +4,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import storm.repository.com.core.dto.RepositoryOperationDto;
 import storm.repository.com.core.runtime.RepositoryConnectorExecutor;
+import storm.repository.com.core.util.SshTunnelManager;
+import storm.repository.com.core.util.TunneledConnection;
 
 import java.sql.*;
 import java.util.*;
@@ -39,19 +41,13 @@ public class PostgresConnectorExecutor implements RepositoryConnectorExecutor {
     // ── list_schema ──────────────────────────────────────────────────────────
 
     private List<Map<String, Object>> listSchema(Map<String, String> config) {
-        String host     = required(config, "host");
-        String port     = config.getOrDefault("port", "5432");
-        String database = required(config, "database");
-        String username = required(config, "username");
-        String password = required(config, "password");
+        log.info("Conectando a PostgreSQL host={} db={}", config.get("host"), config.get("database"));
 
-        String url = String.format("jdbc:postgresql://%s:%s/%s", host, port, database);
-        log.info("Conectando a PostgreSQL host={} db={}", host, database);
-
-        try (Connection conn = DriverManager.getConnection(url, username, password)) {
+        try (Connection conn = connect(config)) {
             return readSchema(conn);
         } catch (SQLException e) {
-            log.error("Error conectando a PostgreSQL host={} db={}: {}", host, database, e.getMessage());
+            log.error("Error conectando a PostgreSQL host={} db={}: {}",
+                    config.get("host"), config.get("database"), e.getMessage());
             throw new RuntimeException("No se pudo conectar a PostgreSQL: " + sanitize(e.getMessage()), e);
         }
     }
@@ -264,8 +260,12 @@ public class PostgresConnectorExecutor implements RepositoryConnectorExecutor {
         String database = required(config, "database");
         String username = required(config, "username");
         String password = required(config, "password");
-        String url = String.format("jdbc:postgresql://%s:%s/%s", host, port, database);
-        return DriverManager.getConnection(url, username, password);
+
+        SshTunnelManager.ResolvedEndpoint endpoint =
+                SshTunnelManager.resolve(config, host, Integer.parseInt(port));
+        String url = String.format("jdbc:postgresql://%s:%s/%s", endpoint.host(), endpoint.port(), database);
+        Connection raw = DriverManager.getConnection(url, username, password);
+        return TunneledConnection.wrap(raw, endpoint);
     }
 
     private void buildWhereClause(Map<String, Object> filter, StringBuilder sql, List<Object> params) {

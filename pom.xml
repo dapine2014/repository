@@ -82,6 +82,11 @@
             <artifactId>jcc</artifactId>
             <version>11.5.9.0</version>
         </dependency>
+        <dependency>
+            <groupId>com.github.mwiede</groupId>
+            <artifactId>jsch</artifactId>
+            <version>0.2.25</version>
+        </dependency>
 
         <dependency>
             <groupId>org.springframework.boot</groupId>

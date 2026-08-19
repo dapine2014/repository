@@ -4,6 +4,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import storm.repository.com.core.dto.RepositoryOperationDto;
 import storm.repository.com.core.runtime.RepositoryConnectorExecutor;
+import storm.repository.com.core.util.SshTunnelManager;
+import storm.repository.com.core.util.TunneledConnection;
 
 import java.sql.*;
 import java.util.*;
@@ -262,10 +264,14 @@ public class MysqlConnectorExecutor implements RepositoryConnectorExecutor {
         String database = required(config, "database");
         String username = required(config, "username");
         String password = required(config, "password");
+
+        SshTunnelManager.ResolvedEndpoint endpoint =
+                SshTunnelManager.resolve(config, host, Integer.parseInt(port));
         String url = String.format(
                 "jdbc:mysql://%s:%s/%s?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC",
-                host, port, database);
-        return DriverManager.getConnection(url, username, password);
+                endpoint.host(), endpoint.port(), database);
+        Connection raw = DriverManager.getConnection(url, username, password);
+        return TunneledConnection.wrap(raw, endpoint);
     }
 
     private void buildWhereClause(Map<String, Object> filter, StringBuilder sql, List<Object> params) {

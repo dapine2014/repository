@@ -14,9 +14,11 @@ import org.springframework.stereotype.Component;
 import storm.repository.com.core.api.ConnectorConfig;
 import storm.repository.com.core.dto.RepositoryOperationDto;
 import storm.repository.com.core.runtime.RepositoryConnectorExecutor;
+import storm.repository.com.core.util.SshTunnelManager;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -37,25 +39,63 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
 
     @Override
     public Object execute(RepositoryOperationDto operation, Map<String, String> config) {
-        MongoConnectorConfig mongoConfig = new MongoConnectorConfig(new ConnectorConfig(config));
         validateOperation(operation);
 
-        try (MongoClient client = MongoConnectorClient.createClient(mongoConfig)) {
-            MongoDatabase database = client.getDatabase(mongoConfig.database());
-            String method = operation.getMethod().toLowerCase();
+        try (SshTunnelManager.ResolvedEndpoint endpoint = resolveEndpoint(config)) {
+            MongoConnectorConfig mongoConfig = buildMongoConfig(config, endpoint);
 
-            return switch (method) {
-                case "list_schema"     -> listSchema(database);
-                case "drop_database"   -> dropDatabase(database, mongoConfig.database());
-                case "drop_collection" -> dropCollection(database, operation.getCollection());
-                case "save"            -> save(database.getCollection(operation.getCollection()), operation);
-                case "find"            -> find(database.getCollection(operation.getCollection()), operation);
-                case "insert"          -> insert(database.getCollection(operation.getCollection()), operation);
-                case "update"          -> update(database.getCollection(operation.getCollection()), operation);
-                case "delete"          -> delete(database.getCollection(operation.getCollection()), operation);
-                default -> throw new IllegalArgumentException("Unsupported method: " + operation.getMethod());
-            };
+            try (MongoClient client = MongoConnectorClient.createClient(mongoConfig)) {
+                MongoDatabase database = client.getDatabase(mongoConfig.database());
+                String method = operation.getMethod().toLowerCase();
+
+                return switch (method) {
+                    case "list_schema"     -> listSchema(database);
+                    case "drop_database"   -> dropDatabase(database, mongoConfig.database());
+                    case "drop_collection" -> dropCollection(database, operation.getCollection());
+                    case "save"            -> save(database.getCollection(operation.getCollection()), operation);
+                    case "find"            -> find(database.getCollection(operation.getCollection()), operation);
+                    case "insert"          -> insert(database.getCollection(operation.getCollection()), operation);
+                    case "update"          -> update(database.getCollection(operation.getCollection()), operation);
+                    case "delete"          -> delete(database.getCollection(operation.getCollection()), operation);
+                    default -> throw new IllegalArgumentException("Unsupported method: " + operation.getMethod());
+                };
+            }
         }
+    }
+
+    private SshTunnelManager.ResolvedEndpoint resolveEndpoint(Map<String, String> config) {
+        if (!"SSH_TUNNEL".equals(config.get("accesoTipo"))) {
+            // Conexión directa: la uri ya trae host:port embebidos, no hay nada que resolver
+            return SshTunnelManager.resolve(config, "", 0);
+        }
+        String host = requireBastionField(config, "host");
+        int port = Integer.parseInt(config.getOrDefault("port", "27017"));
+        return SshTunnelManager.resolve(config, host, port);
+    }
+
+    private MongoConnectorConfig buildMongoConfig(Map<String, String> config, SshTunnelManager.ResolvedEndpoint endpoint) {
+        if (!"SSH_TUNNEL".equals(config.get("accesoTipo"))) {
+            return new MongoConnectorConfig(new ConnectorConfig(config));
+        }
+        String username = requireBastionField(config, "username");
+        String password = config.getOrDefault("password", "");
+        String database = requireBastionField(config, "database");
+        String uri = password.isBlank()
+                ? String.format("mongodb://%s:%d/%s?authSource=admin", endpoint.host(), endpoint.port(), database)
+                : String.format("mongodb://%s:%s@%s:%d/%s?authSource=admin",
+                        username, password, endpoint.host(), endpoint.port(), database);
+
+        Map<String, String> effective = new HashMap<>(config);
+        effective.put("uri", uri);
+        return new MongoConnectorConfig(new ConnectorConfig(effective));
+    }
+
+    private String requireBastionField(Map<String, String> config, String key) {
+        String value = config.get(key);
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException("Falta configuración requerida para túnel Mongo: " + key);
+        }
+        return value;
     }
 
     private void validateOperation(RepositoryOperationDto operation) {

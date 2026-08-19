@@ -9,6 +9,8 @@ import redis.clients.jedis.params.ScanParams;
 import redis.clients.jedis.resps.ScanResult;
 import storm.repository.com.core.dto.RepositoryOperationDto;
 import storm.repository.com.core.runtime.RepositoryConnectorExecutor;
+import storm.repository.com.core.util.SshTunnelManager;
+import storm.repository.com.core.util.TunneledJedisPool;
 
 import java.util.*;
 
@@ -214,13 +216,14 @@ public class RedisConnectorExecutor implements RepositoryConnectorExecutor {
         String password = config.get("password");
         int    dbIndex  = Integer.parseInt(config.getOrDefault("database", "0"));
 
+        SshTunnelManager.ResolvedEndpoint endpoint = SshTunnelManager.resolve(config, host, port);
+
         JedisPoolConfig poolConfig = new JedisPoolConfig();
         poolConfig.setMaxTotal(4);
         poolConfig.setMaxIdle(2);
 
-        return (password != null && !password.isBlank())
-                ? new JedisPool(poolConfig, host, port, 3000, password, dbIndex)
-                : new JedisPool(poolConfig, host, port, 3000, null, dbIndex);
+        return new TunneledJedisPool(poolConfig, endpoint.host(), endpoint.port(), 3000,
+                (password != null && !password.isBlank()) ? password : null, dbIndex, endpoint);
     }
 
     private boolean matchesFilter(Map<String, Object> doc, Map<String, Object> filter) {

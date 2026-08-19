@@ -272,9 +272,14 @@ public class SqlServerConnectorExecutor implements RepositoryConnectorExecutor {
 
         SshTunnelManager.ResolvedEndpoint endpoint =
                 SshTunnelManager.resolve(config, host, Integer.parseInt(port));
-        Connection raw = DriverManager.getConnection(
-                buildUrl(endpoint.host(), String.valueOf(endpoint.port()), database), username, password);
-        return TunneledConnection.wrap(raw, endpoint);
+        try {
+            Connection raw = DriverManager.getConnection(
+                    buildUrl(endpoint.host(), String.valueOf(endpoint.port()), database), username, password);
+            return TunneledConnection.wrap(raw, endpoint);
+        } catch (RuntimeException | SQLException e) {
+            endpoint.close();
+            throw e;
+        }
     }
 
     private String buildUrl(String host, String port, String database) {

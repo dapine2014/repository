@@ -263,9 +263,14 @@ public class PostgresConnectorExecutor implements RepositoryConnectorExecutor {
 
         SshTunnelManager.ResolvedEndpoint endpoint =
                 SshTunnelManager.resolve(config, host, Integer.parseInt(port));
-        String url = String.format("jdbc:postgresql://%s:%s/%s", endpoint.host(), endpoint.port(), database);
-        Connection raw = DriverManager.getConnection(url, username, password);
-        return TunneledConnection.wrap(raw, endpoint);
+        try {
+            String url = String.format("jdbc:postgresql://%s:%s/%s", endpoint.host(), endpoint.port(), database);
+            Connection raw = DriverManager.getConnection(url, username, password);
+            return TunneledConnection.wrap(raw, endpoint);
+        } catch (RuntimeException | SQLException e) {
+            endpoint.close();
+            throw e;
+        }
     }
 
     private void buildWhereClause(Map<String, Object> filter, StringBuilder sql, List<Object> params) {

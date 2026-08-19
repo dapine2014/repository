@@ -264,13 +264,18 @@ public class OracleConnectorExecutor implements RepositoryConnectorExecutor {
 
         SshTunnelManager.ResolvedEndpoint endpoint =
                 SshTunnelManager.resolve(config, host, Integer.parseInt(port));
-        // Soporta tanto SID (jdbc:oracle:thin:@host:port:SID)
-        // como Service Name (jdbc:oracle:thin:@//host:port/service)
-        String url = database.contains("/")
-                ? String.format("jdbc:oracle:thin:@//%s:%s/%s", endpoint.host(), endpoint.port(), database)
-                : String.format("jdbc:oracle:thin:@%s:%s:%s", endpoint.host(), endpoint.port(), database);
-        Connection raw = DriverManager.getConnection(url, username, password);
-        return TunneledConnection.wrap(raw, endpoint);
+        try {
+            // Soporta tanto SID (jdbc:oracle:thin:@host:port:SID)
+            // como Service Name (jdbc:oracle:thin:@//host:port/service)
+            String url = database.contains("/")
+                    ? String.format("jdbc:oracle:thin:@//%s:%s/%s", endpoint.host(), endpoint.port(), database)
+                    : String.format("jdbc:oracle:thin:@%s:%s:%s", endpoint.host(), endpoint.port(), database);
+            Connection raw = DriverManager.getConnection(url, username, password);
+            return TunneledConnection.wrap(raw, endpoint);
+        } catch (RuntimeException | SQLException e) {
+            endpoint.close();
+            throw e;
+        }
     }
 
     private void buildWhereClause(Map<String, Object> filter, StringBuilder sql, List<Object> params) {

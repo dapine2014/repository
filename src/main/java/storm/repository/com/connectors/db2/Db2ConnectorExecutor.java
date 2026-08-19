@@ -4,6 +4,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import storm.repository.com.core.dto.RepositoryOperationDto;
 import storm.repository.com.core.runtime.RepositoryConnectorExecutor;
+import storm.repository.com.core.util.SshTunnelManager;
+import storm.repository.com.core.util.TunneledConnection;
 
 import java.sql.*;
 import java.util.*;
@@ -39,18 +41,13 @@ public class Db2ConnectorExecutor implements RepositoryConnectorExecutor {
     // ── list_schema ──────────────────────────────────────────────────────────
 
     private List<Map<String, Object>> listSchema(Map<String, String> config) {
-        String host     = required(config, "host");
-        String port     = config.getOrDefault("port", "50000");
-        String database = required(config, "database");
-        String username = required(config, "username");
-        String password = required(config, "password");
+        log.info("Conectando a DB2 host={} db={}", config.get("host"), config.get("database"));
 
-        log.info("Conectando a DB2 host={} db={}", host, database);
-
-        try (Connection conn = DriverManager.getConnection(buildUrl(host, port, database), username, password)) {
-            return readSchema(conn, username);
+        try (Connection conn = connect(config)) {
+            return readSchema(conn, config.get("username"));
         } catch (SQLException e) {
-            log.error("Error conectando a DB2 host={} db={}: {}", host, database, e.getMessage());
+            log.error("Error conectando a DB2 host={} db={}: {}",
+                    config.get("host"), config.get("database"), e.getMessage());
             throw new RuntimeException("No se pudo conectar a DB2: " + sanitize(e.getMessage()), e);
         }
     }
@@ -272,7 +269,12 @@ public class Db2ConnectorExecutor implements RepositoryConnectorExecutor {
         String database = required(config, "database");
         String username = required(config, "username");
         String password = required(config, "password");
-        return DriverManager.getConnection(buildUrl(host, port, database), username, password);
+
+        SshTunnelManager.ResolvedEndpoint endpoint =
+                SshTunnelManager.resolve(config, host, Integer.parseInt(port));
+        Connection raw = DriverManager.getConnection(
+                buildUrl(endpoint.host(), String.valueOf(endpoint.port()), database), username, password);
+        return TunneledConnection.wrap(raw, endpoint);
     }
 
     private String buildUrl(String host, String port, String database) {

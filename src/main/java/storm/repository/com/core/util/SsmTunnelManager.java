@@ -10,12 +10,16 @@ import software.amazon.awssdk.services.ssm.model.StartSessionResponse;
 import software.amazon.awssdk.services.ssm.model.TerminateSessionRequest;
 
 import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.List;
 import java.util.Map;
 
@@ -26,6 +30,7 @@ public final class SsmTunnelManager {
     private static final long RETRY_BACKOFF_MS = 1000;
     private static final long READY_TIMEOUT_MS = 15_000;
     private static final long READY_POLL_INTERVAL_MS = 200;
+    private static final int STDERR_TAIL_LINES = 50;
 
     private SsmTunnelManager() {
     }
@@ -116,11 +121,21 @@ public final class SsmTunnelManager {
             throw new IllegalStateException("No se pudo lanzar session-manager-plugin", e);
         }
 
+        // El plugin puede escribir a stdout/stderr durante toda la vida del túnel
+        // (reconexiones, warnings). Si nadie drena esos pipes, el buffer del SO
+        // (~64KB en Linux) se llena y el subproceso se bloquea en el write,
+        // congelando el túnel en silencio — en este pod compartido de larga
+        // duración eso puede retener indefinidamente un hilo del pool de
+        // consumidores de Kafka. Hilos daemon drenan ambos continuamente hacia
+        // un buffer acotado, usado solo para el mensaje de error si falla el arranque.
+        startStreamDrain(process.getInputStream());
+        Deque<String> stderrTail = startStreamDrain(process.getErrorStream());
+
         if (!waitForPort(localPort, READY_TIMEOUT_MS)) {
             process.destroy();
             terminateSession(ssmClient, response.sessionId());
             ssmClient.close();
-            String stderr = readStream(process);
+            String stderr = tailToString(stderrTail);
             throw new IllegalStateException(
                     "El plugin session-manager-plugin no abrió el puerto local " + localPort
                             + " en " + READY_TIMEOUT_MS + "ms (instancia=" + instanceId + "): " + stderr);
@@ -213,12 +228,39 @@ public final class SsmTunnelManager {
         return false;
     }
 
-    private static String readStream(Process process) {
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {
-            return reader.lines().reduce("", (a, b) -> a + b + "\n");
-        } catch (Exception e) {
-            return "";
+    /**
+     * Lanza un hilo daemon que drena `stream` línea a línea hasta EOF, guardando
+     * solo las últimas STDERR_TAIL_LINES en un Deque acotado — evita que el pipe
+     * se llene y bloquee al subproceso, y conserva contexto útil para el mensaje
+     * de error si el túnel falla al arrancar.
+     */
+    private static Deque<String> startStreamDrain(InputStream stream) {
+        Deque<String> tail = new ArrayDeque<>();
+        Thread drainThread = new Thread(() -> {
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(stream, StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    synchronized (tail) {
+                        tail.addLast(line);
+                        if (tail.size() > STDERR_TAIL_LINES) {
+                            tail.removeFirst();
+                        }
+                    }
+                }
+            } catch (IOException ignored) {
+                // El stream se cierra cuando el proceso termina — fin normal del hilo.
+            }
+        });
+        drainThread.setDaemon(true);
+        drainThread.setName("ssm-tunnel-stream-drain");
+        drainThread.start();
+        return tail;
+    }
+
+    private static String tailToString(Deque<String> tail) {
+        synchronized (tail) {
+            return String.join("\n", tail);
         }
     }
 

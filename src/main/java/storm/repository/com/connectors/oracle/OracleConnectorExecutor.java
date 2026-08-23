@@ -4,7 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import storm.repository.com.core.dto.RepositoryOperationDto;
 import storm.repository.com.core.runtime.RepositoryConnectorExecutor;
-import storm.repository.com.core.util.SshTunnelManager;
+import storm.repository.com.core.util.ConnectivityResolver;
 import storm.repository.com.core.util.TunneledConnection;
 
 import java.sql.*;
@@ -262,8 +262,8 @@ public class OracleConnectorExecutor implements RepositoryConnectorExecutor {
         String username = required(config, "username");
         String password = required(config, "password");
 
-        SshTunnelManager.ResolvedEndpoint endpoint =
-                SshTunnelManager.resolve(config, host, Integer.parseInt(port));
+        ConnectivityResolver.ResolvedEndpoint endpoint =
+                ConnectivityResolver.resolve(config, host, Integer.parseInt(port));
         try {
             // Soporta tanto SID (jdbc:oracle:thin:@host:port:SID)
             // como Service Name (jdbc:oracle:thin:@//host:port/service)

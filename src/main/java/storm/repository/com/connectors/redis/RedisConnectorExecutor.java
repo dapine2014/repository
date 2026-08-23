@@ -9,7 +9,7 @@ import redis.clients.jedis.params.ScanParams;
 import redis.clients.jedis.resps.ScanResult;
 import storm.repository.com.core.dto.RepositoryOperationDto;
 import storm.repository.com.core.runtime.RepositoryConnectorExecutor;
-import storm.repository.com.core.util.SshTunnelManager;
+import storm.repository.com.core.util.ConnectivityResolver;
 import storm.repository.com.core.util.TunneledJedisPool;
 
 import java.util.*;
@@ -216,7 +216,7 @@ public class RedisConnectorExecutor implements RepositoryConnectorExecutor {
         String password = config.get("password");
         int    dbIndex  = Integer.parseInt(config.getOrDefault("database", "0"));
 
-        SshTunnelManager.ResolvedEndpoint endpoint = SshTunnelManager.resolve(config, host, port);
+        ConnectivityResolver.ResolvedEndpoint endpoint = ConnectivityResolver.resolve(config, host, port);
 
         JedisPoolConfig poolConfig = new JedisPoolConfig();
         poolConfig.setMaxTotal(4);

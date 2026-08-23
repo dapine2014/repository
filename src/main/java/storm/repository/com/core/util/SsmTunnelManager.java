@@ -65,6 +65,10 @@ public final class SsmTunnelManager {
             } catch (Exception e) {
                 lastError = e;
                 log.warn("Intento {}/{} de túnel AWS SSM a {} falló: {}", attempt, MAX_ATTEMPTS, instanceId, e.getMessage());
+                if (isPermanentSsmError(e)) {
+                    log.error("Fallo permanente al abrir túnel AWS SSM, no se reintenta: {}", e.getMessage());
+                    throw new IllegalStateException(classifyError(instanceId, region, e), e);
+                }
                 if (attempt < MAX_ATTEMPTS) {
                     sleep(RETRY_BACKOFF_MS);
                 }
@@ -73,18 +77,33 @@ public final class SsmTunnelManager {
         throw new IllegalStateException(classifyError(instanceId, region, lastError), lastError);
     }
 
+    /**
+     * True si el error es permanente (credenciales AWS inválidas, o la instancia
+     * no tiene el SSM Agent registrado/conectado) y no vale la pena reintentar —
+     * mismo criterio que `classifyError()` usa para el mensaje, evaluado antes en
+     * el bucle para cortar de inmediato en vez de agotar los MAX_ATTEMPTS
+     * reintentos. Espejo de `is_permanent_ssm_error()` en el sandbox Python.
+     */
+    private static boolean isPermanentSsmError(Exception e) {
+        String lower = String.valueOf(e.getMessage()).toLowerCase();
+        return lower.contains("accessdenied") || lower.contains("invalidclienttokenid")
+                || lower.contains("unrecognizedclientexception") || lower.contains("signaturedoesnotmatch")
+                || lower.contains("targetnotconnected") || lower.contains("invalidinstanceid");
+    }
+
     private static ResolvedEndpoint openTunnel(String region, String instanceId, String accessKeyId,
                                                 String secretAccessKey, String remoteHost, int remotePort) {
+        int localPort = pickFreePort();
+
         SsmClient ssmClient = SsmClient.builder()
                 .region(Region.of(region))
                 .credentialsProvider(StaticCredentialsProvider.create(
                         AwsBasicCredentials.create(accessKeyId, secretAccessKey)))
                 .build();
 
-        int localPort = pickFreePort();
         String parametersJson = String.format(
                 "{\"host\":[\"%s\"],\"portNumber\":[\"%d\"],\"localPortNumber\":[\"%d\"]}",
-                remoteHost, remotePort, localPort);
+                jsonEscape(remoteHost), remotePort, localPort);
 
         StartSessionResponse response;
         try {
@@ -103,13 +122,14 @@ public final class SsmTunnelManager {
 
         String responseJson = String.format(
                 "{\"SessionId\":\"%s\",\"TokenValue\":\"%s\",\"StreamUrl\":\"%s\"}",
-                response.sessionId(), response.tokenValue(), response.streamUrl());
+                jsonEscape(response.sessionId()), jsonEscape(response.tokenValue()), jsonEscape(response.streamUrl()));
 
-        ProcessBuilder pb = new ProcessBuilder(
-                "session-manager-plugin", responseJson, region, "StartSession", "",
-                parametersJson, ssmClient.serviceClientConfiguration().endpointOverride()
-                        .map(Object::toString)
-                        .orElse("https://ssm." + region + ".amazonaws.com"));
+        String endpoint = ssmClient.serviceClientConfiguration().endpointOverride()
+                .map(Object::toString)
+                .orElse("https://ssm." + region + ".amazonaws.com");
+
+        List<String> args = buildPluginArgs(responseJson, region, instanceId, parametersJson, endpoint);
+        ProcessBuilder pb = new ProcessBuilder(args);
         pb.redirectErrorStream(false);
 
         Process process;
@@ -131,7 +151,7 @@ public final class SsmTunnelManager {
         startStreamDrain(process.getInputStream());
         Deque<String> stderrTail = startStreamDrain(process.getErrorStream());
 
-        if (!waitForPort(localPort, READY_TIMEOUT_MS)) {
+        if (!waitForPort(process, localPort, READY_TIMEOUT_MS)) {
             process.destroy();
             terminateSession(ssmClient, response.sessionId());
             ssmClient.close();
@@ -170,6 +190,33 @@ public final class SsmTunnelManager {
         }
         return "No se pudo establecer el túnel AWS SSM a la instancia " + instanceId
                 + " (región " + region + "): " + detail;
+    }
+
+    /**
+     * Arma el argv exacto que espera `session-manager-plugin`: response-JSON de
+     * StartSession, región, "StartSession", perfil (vacío), y — el argumento que
+     * un fallback previo pasaba mal — la request COMPLETA de StartSession
+     * (`{"Target":...,"DocumentName":...,"Parameters":...}`), no solo el mapa
+     * interno de Parameters. Es el mismo formato que arma `aws ssm start-session`
+     * internamente y el que ya usa el sandbox Python de este mismo plan
+     * (`ssm_tunnel_manager.py`). Extraído a método package-private (no private)
+     * para que un test pueda fijar la forma del argv sin invocar el binario real.
+     */
+    static List<String> buildPluginArgs(String responseJson, String region, String instanceId,
+                                         String parametersJson, String endpoint) {
+        String startSessionRequestJson = String.format(
+                "{\"Target\":\"%s\",\"DocumentName\":\"AWS-StartPortForwardingToRemoteHost\",\"Parameters\":%s}",
+                jsonEscape(instanceId), parametersJson);
+        return List.of(
+                "session-manager-plugin", responseJson, region, "StartSession", "",
+                startSessionRequestJson, endpoint);
+    }
+
+    private static String jsonEscape(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     private static ResolvedEndpoint direct(String host, int port) {
@@ -215,9 +262,15 @@ public final class SsmTunnelManager {
         }
     }
 
-    private static boolean waitForPort(int port, long timeoutMs) {
+    private static boolean waitForPort(Process process, int port, long timeoutMs) {
         Instant deadline = Instant.now().plusMillis(timeoutMs);
         while (Instant.now().isBefore(deadline)) {
+            // Si el subproceso ya murió (binario ausente, credenciales rechazadas
+            // por el propio plugin, etc.), no tiene sentido seguir sondeando el
+            // puerto hasta agotar el timeout completo — falla de inmediato.
+            if (!process.isAlive()) {
+                return false;
+            }
             try (Socket socket = new Socket()) {
                 socket.connect(new InetSocketAddress("127.0.0.1", port), 1000);
                 return true;

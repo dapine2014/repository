@@ -29,16 +29,21 @@ public final class ConnectivityResolver {
     }
 
     private static ResolvedEndpoint adapt(AutoCloseable inner) {
-        var typed = (Object) inner;
         String host;
         int port;
-        if (typed instanceof SshTunnelManager.ResolvedEndpoint ssh) {
+        if (inner instanceof SshTunnelManager.ResolvedEndpoint ssh) {
             host = ssh.host();
             port = ssh.port();
-        } else {
-            SsmTunnelManager.ResolvedEndpoint ssm = (SsmTunnelManager.ResolvedEndpoint) typed;
+        } else if (inner instanceof SsmTunnelManager.ResolvedEndpoint ssm) {
             host = ssm.host();
             port = ssm.port();
+        } else {
+            // Solo puede llegar aquí si se agrega un tercer mecanismo de
+            // conectividad sin actualizar este método — falla con un mensaje
+            // claro en vez de un ClassCastException opaco.
+            throw new IllegalStateException(
+                    "ConnectivityResolver.adapt() no reconoce el tipo de endpoint: "
+                            + inner.getClass().getName());
         }
         return new ResolvedEndpoint() {
             @Override public String host() { return host; }

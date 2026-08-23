@@ -22,6 +22,12 @@ public class KafkaConsumerConfig {
     private String boostrapServer;
     @Value("${spring.kafka.consumer.group-id}")
     private String groupId;
+    @Value("${spring.kafka.properties.security.protocol:PLAINTEXT}")
+    private String securityProtocol;
+    @Value("${spring.kafka.properties.ssl.truststore.location:}")
+    private String sslTruststoreLocation;
+    @Value("${spring.kafka.properties.ssl.truststore.password:}")
+    private String sslTruststorePassword;
 
     public Map<String,Object> consumerConfig(){
         Map<String,Object> properties = new HashMap<>();
@@ -29,8 +35,21 @@ public class KafkaConsumerConfig {
         properties.put(ConsumerConfig.KEY_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
         properties.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class);
         properties.put(ConsumerConfig.GROUP_ID_CONFIG, groupId);
-
+        addSslProps(properties);
         return properties;
+    }
+
+    private void addSslProps(Map<String, Object> props) {
+        if (!"PLAINTEXT".equalsIgnoreCase(securityProtocol)) {
+            props.put("security.protocol", securityProtocol);
+            if (!sslTruststoreLocation.isBlank()) {
+                props.put("ssl.truststore.location", sslTruststoreLocation);
+            }
+            if (!sslTruststorePassword.isBlank()) {
+                props.put("ssl.truststore.password", sslTruststorePassword);
+            }
+            props.put("ssl.endpoint.identification.algorithm", "");
+        }
     }
 
     @Bean

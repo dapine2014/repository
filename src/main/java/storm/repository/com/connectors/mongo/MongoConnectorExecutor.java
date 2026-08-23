@@ -3,6 +3,7 @@ package storm.repository.com.connectors.mongo;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
+import com.mongodb.client.model.ReplaceOptions;
 import com.mongodb.client.result.DeleteResult;
 import com.mongodb.client.result.InsertManyResult;
 import com.mongodb.client.result.InsertOneResult;
@@ -13,11 +14,16 @@ import org.springframework.stereotype.Component;
 import storm.repository.com.core.api.ConnectorConfig;
 import storm.repository.com.core.dto.RepositoryOperationDto;
 import storm.repository.com.core.runtime.RepositoryConnectorExecutor;
+import storm.repository.com.core.util.ConnectivityResolver;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
 
 @Component
 public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
@@ -29,24 +35,68 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
         return "mongo";
     }
 
+    private static final Set<String> NO_COLLECTION_METHODS = Set.of("list_schema", "drop_database");
+
     @Override
     public Object execute(RepositoryOperationDto operation, Map<String, String> config) {
-        MongoConnectorConfig mongoConfig = new MongoConnectorConfig(new ConnectorConfig(config));
         validateOperation(operation);
 
-        try (MongoClient client = MongoConnectorClient.createClient(mongoConfig)) {
-            MongoDatabase database = client.getDatabase(mongoConfig.database());
-            MongoCollection<Document> collection = database.getCollection(operation.getCollection());
-            String method = operation.getMethod().toLowerCase();
+        try (ConnectivityResolver.ResolvedEndpoint endpoint = resolveEndpoint(config)) {
+            MongoConnectorConfig mongoConfig = buildMongoConfig(config, endpoint);
 
-            return switch (method) {
-                case "find" -> find(collection, operation);
-                case "insert" -> insert(collection, operation);
-                case "update" -> update(collection, operation);
-                case "delete" -> delete(collection, operation);
-                default -> throw new IllegalArgumentException("Unsupported method: " + operation.getMethod());
-            };
+            try (MongoClient client = MongoConnectorClient.createClient(mongoConfig)) {
+                MongoDatabase database = client.getDatabase(mongoConfig.database());
+                String method = operation.getMethod().toLowerCase();
+
+                return switch (method) {
+                    case "list_schema"     -> listSchema(database);
+                    case "drop_database"   -> dropDatabase(database, mongoConfig.database());
+                    case "drop_collection" -> dropCollection(database, operation.getCollection());
+                    case "save"            -> save(database.getCollection(operation.getCollection()), operation);
+                    case "find"            -> find(database.getCollection(operation.getCollection()), operation);
+                    case "insert"          -> insert(database.getCollection(operation.getCollection()), operation);
+                    case "update"          -> update(database.getCollection(operation.getCollection()), operation);
+                    case "delete"          -> delete(database.getCollection(operation.getCollection()), operation);
+                    default -> throw new IllegalArgumentException("Unsupported method: " + operation.getMethod());
+                };
+            }
         }
+    }
+
+    private ConnectivityResolver.ResolvedEndpoint resolveEndpoint(Map<String, String> config) {
+        String accesoTipo = config.get("accesoTipo");
+        if (!"SSH_TUNNEL".equals(accesoTipo) && !"AWS_SSM".equals(accesoTipo)) {
+            return ConnectivityResolver.resolve(config, "", 0);  // conexión directa: uri ya trae host:port
+        }
+        String host = requireBastionField(config, "host");
+        int port = Integer.parseInt(config.getOrDefault("port", "27017"));
+        return ConnectivityResolver.resolve(config, host, port);
+    }
+
+    private MongoConnectorConfig buildMongoConfig(Map<String, String> config, ConnectivityResolver.ResolvedEndpoint endpoint) {
+        String accesoTipo = config.get("accesoTipo");
+        if (!"SSH_TUNNEL".equals(accesoTipo) && !"AWS_SSM".equals(accesoTipo)) {
+            return new MongoConnectorConfig(new ConnectorConfig(config));
+        }
+        String username = requireBastionField(config, "username");
+        String password = config.getOrDefault("password", "");
+        String database = requireBastionField(config, "database");
+        String uri = password.isBlank()
+                ? String.format("mongodb://%s:%d/%s?authSource=admin", endpoint.host(), endpoint.port(), database)
+                : String.format("mongodb://%s:%s@%s:%d/%s?authSource=admin",
+                        username, password, endpoint.host(), endpoint.port(), database);
+
+        Map<String, String> effective = new HashMap<>(config);
+        effective.put("uri", uri);
+        return new MongoConnectorConfig(new ConnectorConfig(effective));
+    }
+
+    private String requireBastionField(Map<String, String> config, String key) {
+        String value = config.get(key);
+        if (value == null || value.isBlank()) {
+            throw new IllegalArgumentException("Falta configuración requerida para túnel Mongo: " + key);
+        }
+        return value;
     }
 
     private void validateOperation(RepositoryOperationDto operation) {
@@ -56,8 +106,40 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
         if (operation.getMethod() == null || operation.getMethod().isBlank()) {
             throw new IllegalArgumentException("Missing operation.method");
         }
-        if (operation.getCollection() == null || operation.getCollection().isBlank()) {
+        String method = operation.getMethod().toLowerCase();
+        if (!NO_COLLECTION_METHODS.contains(method) &&
+                (operation.getCollection() == null || operation.getCollection().isBlank())) {
             throw new IllegalArgumentException("Missing operation.collection");
+        }
+    }
+
+    private Object dropDatabase(MongoDatabase database, String dbName) {
+        database.drop();
+        return Map.of("dropped", dbName);
+    }
+
+    private Object dropCollection(MongoDatabase database, String collectionName) {
+        database.getCollection(collectionName).drop();
+        return Map.of("dropped", collectionName);
+    }
+
+    private Object save(MongoCollection<Document> collection, RepositoryOperationDto operation) {
+        Map<String, Object> map = asMap(operation.getPayload(), "payload");
+        Object idVal = map.get("_id");
+        Document doc = new Document(map);
+
+        if (idVal != null && !idVal.toString().isBlank()) {
+            Object resolvedId = resolveId(idVal.toString());
+            collection.replaceOne(
+                    new Document("_id", resolvedId),
+                    doc,
+                    new ReplaceOptions().upsert(true));
+            return Map.of("_id", idVal.toString());
+        } else {
+            String newId = UUID.randomUUID().toString();
+            doc.put("_id", newId);
+            collection.insertOne(doc);
+            return Map.of("_id", newId);
         }
     }
 
@@ -69,14 +151,32 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
         int maxLimit = resolveMaxLimit(operation, defaultLimit);
         int effectiveLimit = resolveEffectiveLimit(limit, defaultLimit, maxLimit);
         query = query.limit(effectiveLimit);
-        List<Document> results = query.into(new ArrayList<>());
-        String nextCursor = extractNextCursor(results);
-        long totalCount = collection.countDocuments(toDocument(operation.getFilter()));
-        return Map.of(
-                "items", results,
-                "nextCursor", nextCursor,
-                "totalCount", totalCount
-        );
+        List<Map<String, Object>> results = new ArrayList<>();
+        for (Document doc : query) {
+            Map<String, Object> row = new LinkedHashMap<>(doc);
+            if (row.get("_id") instanceof ObjectId oid) {
+                row.put("_id", oid.toHexString());
+            }
+            results.add(row);
+        }
+        return results;
+    }
+
+    private Object listSchema(MongoDatabase database) {
+        List<Map<String, Object>> tables = new ArrayList<>();
+        for (String collectionName : database.listCollectionNames()) {
+            List<Map<String, Object>> columns = new ArrayList<>();
+            Document sample = database.getCollection(collectionName).find().first();
+            if (sample != null) {
+                for (Map.Entry<String, Object> field : sample.entrySet()) {
+                    String type = field.getValue() == null ? "unknown"
+                            : field.getValue().getClass().getSimpleName();
+                    columns.add(Map.of("name", field.getKey(), "type", type));
+                }
+            }
+            tables.add(Map.of("name", collectionName, "columns", columns));
+        }
+        return tables;
     }
 
     private Object insert(MongoCollection<Document> collection, RepositoryOperationDto operation) {
@@ -98,7 +198,7 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
     }
 
     private Object update(MongoCollection<Document> collection, RepositoryOperationDto operation) {
-        Document filter = toDocument(operation.getFilter());
+        Document filter = toFilterDocument(operation.getFilter());
         Map<String, Object> updateFields = asMap(operation.getPayload(), "operation.payload");
         UpdateResult result = collection.updateMany(filter, new Document("$set", updateFields));
         return Map.of(
@@ -108,9 +208,19 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
     }
 
     private Object delete(MongoCollection<Document> collection, RepositoryOperationDto operation) {
-        Document filter = toDocument(operation.getFilter());
+        Document filter = toFilterDocument(operation.getFilter());
         DeleteResult result = collection.deleteMany(filter);
         return Map.of("deletedCount", result.getDeletedCount());
+    }
+
+    // Convierte un string _id de 24 hex chars a ObjectId para compatibilidad
+    // con documentos creados por Spring Data MongoDB (que usa ObjectId nativo).
+    // IDs UUID (36 chars con guiones) se devuelven sin cambio.
+    private Object resolveId(String s) {
+        if (s != null && s.length() == 24) {
+            try { return new ObjectId(s); } catch (IllegalArgumentException ignored) {}
+        }
+        return s;
     }
 
     private Document toDocument(Map<String, Object> map) {
@@ -120,8 +230,15 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
         return new Document(map);
     }
 
+    private Document toFilterDocument(Map<String, Object> map) {
+        Document doc = toDocument(map);
+        Object id = doc.get("_id");
+        if (id instanceof String s) doc.put("_id", resolveId(s));
+        return doc;
+    }
+
     private Document buildFindFilter(RepositoryOperationDto operation) {
-        Document baseFilter = toDocument(operation.getFilter());
+        Document baseFilter = toFilterDocument(operation.getFilter());
         String cursor = operation.getCursor();
         if (cursor == null || cursor.isBlank()) {
             return baseFilter;
@@ -144,18 +261,6 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
         } catch (IllegalArgumentException ex) {
             throw new IllegalArgumentException("Invalid cursor; expected Mongo ObjectId hex string");
         }
-    }
-
-    private String extractNextCursor(List<Document> results) {
-        if (results == null || results.isEmpty()) {
-            return null;
-        }
-        Document last = results.get(results.size() - 1);
-        Object id = last.get("_id");
-        if (id instanceof ObjectId objectId) {
-            return objectId.toHexString();
-        }
-        return id == null ? null : id.toString();
     }
 
     private int resolveDefaultLimit(RepositoryOperationDto operation) {

@@ -1,0 +1,44 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: repository-networkpolicy
+  namespace: default
+  labels:
+    component: storm-core
+spec:
+  podSelector:
+    matchLabels:
+      app: repository
+  policyTypes:
+    - Ingress
+    - Egress
+
+  ingress:
+    # Tráfico interno del cluster (storm-api, storm-rules — REPOSITORY_QUERY vía Kafka, no HTTP directo)
+    - ports:
+        - protocol: TCP
+          port: 8080
+
+  egress:
+    # DNS
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+    # Kafka (consume REPOSITORY_QUERY, publica REPOSITORY_RESPONSE)
+    - to:
+        - ipBlock:
+            cidr: 192.168.49.1/32   # host.minikube.internal
+      ports:
+        - protocol: TCP
+          port: 29092
+
+    # MongoDB (storm_data — operaciones de lectura/escritura)
+    - to:
+        - ipBlock:
+            cidr: 192.168.49.1/32
+      ports:
+        - protocol: TCP
+          port: 27017

@@ -43,14 +43,25 @@ spec:
             - name: REPOSITORY_TARGET_DEFAULT_DATABASE
               value: "storm_data"
             - name: REPOSITORY_ALLOW_INLINE_SENSITIVE_CONFIG
-              value: "false"
+              value: "true"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms256m -Xmx640m -XX:+UseG1GC -XX:MaxMetaspaceSize=192m"
+            - name: KAFKA_SSL_TRUSTSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: storm-kafka-tls
+                  key: truststore-password
+          volumeMounts:
+            - name: kafka-tls
+              mountPath: /etc/kafka/ssl
+              readOnly: true
           resources:
             requests:
               cpu: "200m"
-              memory: "256Mi"
+              memory: "512Mi"
             limits:
               cpu: "500m"
-              memory: "512Mi"
+              memory: "1Gi"
           readinessProbe:
             httpGet:
               path: /service/actuator/health
@@ -65,3 +76,10 @@ spec:
             initialDelaySeconds: 60
             periodSeconds: 20
             failureThreshold: 3
+      volumes:
+        - name: kafka-tls
+          secret:
+            secretName: storm-kafka-tls
+            items:
+              - key: client.truststore.jks
+                path: client.truststore.jks

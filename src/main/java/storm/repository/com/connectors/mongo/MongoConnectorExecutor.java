@@ -14,7 +14,7 @@ import org.springframework.stereotype.Component;
 import storm.repository.com.core.api.ConnectorConfig;
 import storm.repository.com.core.dto.RepositoryOperationDto;
 import storm.repository.com.core.runtime.RepositoryConnectorExecutor;
-import storm.repository.com.core.util.SshTunnelManager;
+import storm.repository.com.core.util.ConnectivityResolver;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -41,7 +41,7 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
     public Object execute(RepositoryOperationDto operation, Map<String, String> config) {
         validateOperation(operation);
 
-        try (SshTunnelManager.ResolvedEndpoint endpoint = resolveEndpoint(config)) {
+        try (ConnectivityResolver.ResolvedEndpoint endpoint = resolveEndpoint(config)) {
             MongoConnectorConfig mongoConfig = buildMongoConfig(config, endpoint);
 
             try (MongoClient client = MongoConnectorClient.createClient(mongoConfig)) {
@@ -63,18 +63,19 @@ public class MongoConnectorExecutor implements RepositoryConnectorExecutor {
         }
     }
 
-    private SshTunnelManager.ResolvedEndpoint resolveEndpoint(Map<String, String> config) {
-        if (!"SSH_TUNNEL".equals(config.get("accesoTipo"))) {
-            // Conexión directa: la uri ya trae host:port embebidos, no hay nada que resolver
-            return SshTunnelManager.resolve(config, "", 0);
+    private ConnectivityResolver.ResolvedEndpoint resolveEndpoint(Map<String, String> config) {
+        String accesoTipo = config.get("accesoTipo");
+        if (!"SSH_TUNNEL".equals(accesoTipo) && !"AWS_SSM".equals(accesoTipo)) {
+            return ConnectivityResolver.resolve(config, "", 0);  // conexión directa: uri ya trae host:port
         }
         String host = requireBastionField(config, "host");
         int port = Integer.parseInt(config.getOrDefault("port", "27017"));
-        return SshTunnelManager.resolve(config, host, port);
+        return ConnectivityResolver.resolve(config, host, port);
     }
 
-    private MongoConnectorConfig buildMongoConfig(Map<String, String> config, SshTunnelManager.ResolvedEndpoint endpoint) {
-        if (!"SSH_TUNNEL".equals(config.get("accesoTipo"))) {
+    private MongoConnectorConfig buildMongoConfig(Map<String, String> config, ConnectivityResolver.ResolvedEndpoint endpoint) {
+        String accesoTipo = config.get("accesoTipo");
+        if (!"SSH_TUNNEL".equals(accesoTipo) && !"AWS_SSM".equals(accesoTipo)) {
             return new MongoConnectorConfig(new ConnectorConfig(config));
         }
         String username = requireBastionField(config, "username");

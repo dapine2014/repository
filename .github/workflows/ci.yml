@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configurar JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+
+      # RepositoryApplicationTests carga el contexto completo de Spring (Kafka + MongoDB
+      # reales); no hay esos servicios en el runner, así que se excluye. El resto de la
+      # suite (JsonUtilTest, ConnectorRegistryTest, MessageHandlerTest, SshTunnelManagerTest,
+      # SsmTunnelManagerTest, etc.) sí corre completa.
+      - name: Build y tests
+        run: >
+          mvn -B
+          -Dtest='!RepositoryApplicationTests'
+          -DfailIfNoTests=false
+          -Dsurefire.failIfNoSpecifiedTests=false
+          test

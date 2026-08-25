@@ -28,3 +28,41 @@ jobs:
           -DfailIfNoTests=false
           -Dsurefire.failIfNoSpecifiedTests=false
           test
+
+  # Corre en un runner self-hosted en la misma máquina que Minikube. Namespace
+  # storm-staging, separado de default (group-id repository-staging, Mongo
+  # storm_data_staging).
+  deploy-staging:
+    needs: build
+    if: github.ref == 'refs/heads/master' && github.event_name == 'push'
+    runs-on: [self-hosted, storm-staging]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build imagen en el daemon de Docker de Minikube
+        run: |
+          eval $(minikube docker-env)
+          docker build -t storm-repository:staging-${{ github.sha }} .
+
+      - name: Aplicar manifiestos de storm-staging
+        run: kubectl apply -f k8s-staging/
+
+      - name: Actualizar imagen del deployment
+        run: kubectl set image deployment/repository repository=storm-repository:staging-${{ github.sha }} -n storm-staging
+
+      - name: Esperar rollout
+        run: kubectl rollout status deployment/repository -n storm-staging --timeout=120s
+
+      - name: Healthcheck
+        run: |
+          MINIKUBE_IP=$(minikube ip)
+          for i in $(seq 1 10); do
+            if curl -sS --resolve storm-repo-staging.local:80:$MINIKUBE_IP http://storm-repo-staging.local/service/actuator/health | tee /tmp/health.json | grep -q '"status":"UP"'; then
+              echo "Healthcheck OK"
+              exit 0
+            fi
+            echo "Intento $i falló, reintentando en 3s..."
+            sleep 3
+          done
+          cat /tmp/health.json 2>/dev/null || true
+          exit 1

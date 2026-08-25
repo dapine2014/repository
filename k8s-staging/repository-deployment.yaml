@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: repository
+  namespace: storm-staging
+  labels:
+    app: repository
+    component: storm-core
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: repository
+  template:
+    metadata:
+      labels:
+        app: repository
+        component: storm-core
+    spec:
+      containers:
+        - name: repository
+          image: storm-repository:staging
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: AMBIENTE
+              value: "staging"
+            - name: PORT
+              value: "8080"
+            - name: SPRING_KAFKA_BOOTSTRAP_SERVERS
+              value: "192.168.49.1:29092"
+            - name: SPRING_KAFKA_CONSUMER_GROUP_ID
+              value: "repository-staging"
+            - name: REPOSITORY_TARGET_DEFAULT_CONNECTOR
+              value: "mongo"
+            - name: REPOSITORY_TARGET_DEFAULT_URI
+              valueFrom:
+                secretKeyRef:
+                  name: repository-secrets
+                  key: mongo-uri
+            - name: REPOSITORY_TARGET_DEFAULT_DATABASE
+              value: "storm_data_staging"
+            - name: REPOSITORY_ALLOW_INLINE_SENSITIVE_CONFIG
+              value: "true"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-Xms256m -Xmx640m -XX:+UseG1GC -XX:MaxMetaspaceSize=192m"
+            - name: KAFKA_SSL_TRUSTSTORE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: storm-kafka-tls
+                  key: truststore-password
+          volumeMounts:
+            - name: kafka-tls
+              mountPath: /etc/kafka/ssl
+              readOnly: true
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "512Mi"
+            limits:
+              cpu: "500m"
+              memory: "1Gi"
+          readinessProbe:
+            httpGet:
+              path: /service/actuator/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /service/actuator/health
+              port: 8080
+            initialDelaySeconds: 60
+            periodSeconds: 20
+            failureThreshold: 3
+      volumes:
+        - name: kafka-tls
+          secret:
+            secretName: storm-kafka-tls
+            items:
+              - key: client.truststore.jks
+                path: client.truststore.jks

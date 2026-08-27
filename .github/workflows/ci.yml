@@ -51,7 +51,7 @@ jobs:
         run: kubectl set image deployment/repository repository=storm-repository:staging-${{ github.sha }} -n storm-staging
 
       - name: Esperar rollout
-        run: kubectl rollout status deployment/repository -n storm-staging --timeout=120s
+        run: kubectl rollout status deployment/repository -n storm-staging --timeout=240s
 
       - name: Healthcheck
         run: |
